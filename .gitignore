@@ -3,4 +3,5 @@ __pycache__/
 .venv/
 venv/
 .streamlit/secrets.toml
+.pytest_cache/
 .DS_Store

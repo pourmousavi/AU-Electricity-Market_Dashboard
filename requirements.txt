@@ -1,0 +1,14 @@
+streamlit>=1.40,<2
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.15.0
+scipy>=1.10.0
+sympy>=1.12
+matplotlib>=3.7.0
+cvxpy>=1.4.0
+networkx>=3.1
+pypsa>=0.35.0
+PyYAML>=6.0
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1
+pytest>=8.0
