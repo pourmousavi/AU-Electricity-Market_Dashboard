@@ -1,0 +1,117 @@
+import pytest
+from sqlalchemy import create_engine
+
+from hub import db
+from hub.catalogue import load_catalogue
+
+
+@pytest.fixture()
+def engine():
+    """In-memory SQLite. SQLAlchemy Core keeps the DDL portable to Postgres."""
+    eng = create_engine("sqlite://")
+    db.bootstrap(eng)
+    return eng
+
+
+def test_bootstrap_creates_all_tables(engine) -> None:
+    from sqlalchemy import inspect
+
+    names = set(inspect(engine).get_table_names())
+    assert {"topic", "experiment", "visitor_session", "event"} <= names
+
+
+def test_seed_creates_six_topics_with_all_experiments_enabled(engine) -> None:
+    cat = load_catalogue()
+    assert db.seed_initial(engine, cat) is True
+
+    topics = db.list_topics(engine, include_disabled=True)
+    assert [t["name"] for t in topics] == [
+        "Week 2", "Week 3", "Week 4", "Week 6", "Week 7", "Week 8"
+    ]
+
+    rows = db.list_experiments(engine, topic_id=None, include_disabled=True)
+    assert len(rows) == 25
+    assert all(r["enabled"] for r in rows)
+    assert all(r["topic_id"] is not None for r in rows)
+
+
+def test_seed_is_idempotent(engine) -> None:
+    cat = load_catalogue()
+    assert db.seed_initial(engine, cat) is True
+    assert db.seed_initial(engine, cat) is False
+    assert len(db.list_topics(engine, include_disabled=True)) == 6
+
+
+def test_reconcile_inserts_new_ids_disabled_and_unassigned(engine) -> None:
+    cat = load_catalogue()
+    db.seed_initial(engine, cat)
+
+    from hub.catalogue import Experiment
+
+    extra = dict(cat)
+    extra["w9.brand_new"] = Experiment(
+        id="w9.brand_new", source_key="week2",
+        source_path=cat["w2.consumer_model"].source_path,
+        mode="pin_selectbox", selector="Consumer Model", entry="module",
+    )
+    inserted, orphaned = db.reconcile(engine, extra)
+    assert inserted == 1 and orphaned == 0
+
+    row = db.get_experiment(engine, "w9.brand_new")
+    assert row["enabled"] is False
+    assert row["topic_id"] is None
+
+
+def test_reconcile_marks_missing_ids_orphaned_without_deleting(engine) -> None:
+    cat = load_catalogue()
+    db.seed_initial(engine, cat)
+
+    shrunk = {k: v for k, v in cat.items() if k != "w8.theory"}
+    inserted, orphaned = db.reconcile(engine, shrunk)
+    assert inserted == 0 and orphaned == 1
+
+    row = db.get_experiment(engine, "w8.theory")
+    assert row is not None and row["orphaned"] is True
+
+
+def test_orphaned_experiments_are_hidden_from_students(engine) -> None:
+    cat = load_catalogue()
+    db.seed_initial(engine, cat)
+    db.reconcile(engine, {k: v for k, v in cat.items() if k != "w8.theory"})
+
+    visible = db.list_experiments(engine, topic_id=None, include_disabled=False)
+    assert "w8.theory" not in {r["experiment_id"] for r in visible}
+
+
+def test_toggle_and_reassign(engine) -> None:
+    cat = load_catalogue()
+    db.seed_initial(engine, cat)
+    week2 = db.list_topics(engine, include_disabled=True)[0]["id"]
+
+    db.set_experiment_enabled(engine, "w8.theory", False)
+    assert db.get_experiment(engine, "w8.theory")["enabled"] is False
+
+    db.assign_experiment(engine, "w8.theory", topic_id=week2, sort_order=99)
+    row = db.get_experiment(engine, "w8.theory")
+    assert row["topic_id"] == week2 and row["sort_order"] == 99
+
+
+def test_upsert_topic_creates_then_updates(engine) -> None:
+    new_id = db.upsert_topic(
+        engine, None, "Revision", "Exam prep", "Opens in swotvac", 10, True
+    )
+    assert isinstance(new_id, int)
+    same_id = db.upsert_topic(
+        engine, new_id, "Revision Week", "Exam prep", "Opens in swotvac", 10, True
+    )
+    assert same_id == new_id
+    names = [t["name"] for t in db.list_topics(engine, include_disabled=True)]
+    assert "Revision Week" in names and "Revision" not in names
+
+
+def test_update_experiment_text(engine) -> None:
+    db.seed_initial(engine, load_catalogue())
+    db.update_experiment_text(engine, "w2.consumer_model", "Demand Curves", "Start here.")
+    row = db.get_experiment(engine, "w2.consumer_model")
+    assert row["title"] == "Demand Curves"
+    assert row["blurb"] == "Start here."
