@@ -1,0 +1,41 @@
+# HOW to render each experiment. Presentation (topic, title, order, enabled)
+# lives in the database and is edited in the admin panel — not here.
+sources:
+  week2: sources/week2_consumer_supplier.py
+  week3: sources/week3_pricing_market_power.py
+  week4: sources/week4_optimisation_tools.py
+  week6: sources/week6_duality.py
+  week7: sources/week7_ed_viu.py
+  week8: sources/week8_pf_auction.py
+
+experiments:
+  - {id: w2.consumer_model,       source: week2, mode: pin_selectbox, selector: "Consumer Model"}
+  - {id: w2.consumer_elasticity,  source: week2, mode: pin_selectbox, selector: "Consumer Elasticity"}
+  - {id: w2.supplier_model,       source: week2, mode: pin_selectbox, selector: "Supplier Model"}
+  - {id: w2.supplier_elasticity,  source: week2, mode: pin_selectbox, selector: "Supplier Elasticity"}
+  - {id: w2.market_equilibrium,   source: week2, mode: pin_selectbox, selector: "Market Equilibrium"}
+
+  - {id: w3.pool_pricing,         source: week3, mode: pin_selectbox, selector: "Pool Market Pricing"}
+  - {id: w3.market_power,         source: week3, mode: pin_selectbox, selector: "Market Power Analysis"}
+  - {id: w3.profit_cost_recovery, source: week3, mode: pin_selectbox, selector: "Profit & Cost Recovery"}
+  - {id: w3.interactive_clearing, source: week3, mode: pin_selectbox, selector: "Interactive Market Clearing"}
+
+  - {id: w4.nonlinear_3d,         source: week4, mode: pin_selectbox, selector: "3D Nonlinear Optimization"}
+  - {id: w4.tools_comparison,     source: week4, mode: pin_selectbox, selector: "Modelling Tools Comparison"}
+
+  - {id: w6.strong_duality,       source: week6, mode: pin_tab, entry: module, selector: "Strong Duality"}
+  - {id: w6.weak_duality,         source: week6, mode: pin_tab, entry: module, selector: "Weak Duality Cases"}
+  - {id: w6.duality_theorems,     source: week6, mode: pin_tab, entry: module, selector: "Duality Theorems"}
+
+  - {id: w7.generator_setup,      source: week7, mode: pin_tab, entry: main, selector: "🏭 Generator Setup"}
+  - {id: w7.comparison_results,   source: week7, mode: pin_tab, entry: main, selector: "📊 Comparison Results"}
+  - {id: w7.detailed_analysis,    source: week7, mode: pin_tab, entry: main, selector: "🔍 Detailed Analysis"}
+  - {id: w7.individual_generators, source: week7, mode: pin_tab, entry: main, selector: "📈 Individual Generators"}
+  - {id: w7.pareto,               source: week7, mode: pin_tab, entry: main, selector: "🎯 Pareto Frontier"}
+
+  - {id: w8.market_setup,         source: week8, mode: pin_tab, entry: main, selector: "🏪 Market Setup"}
+  - {id: w8.network_topology,     source: week8, mode: pin_tab, entry: main, selector: "🔌 Network Topology"}
+  - {id: w8.market_results,       source: week8, mode: pin_tab, entry: main, selector: "📈 Market Results"}
+  - {id: w8.dc_opf_results,       source: week8, mode: pin_tab, entry: main, selector: "⚡ DC OPF Results"}
+  - {id: w8.market_vs_opf,        source: week8, mode: pin_tab, entry: main, selector: "🔋 Market vs DC OPF"}
+  - {id: w8.theory,               source: week8, mode: pin_tab, entry: main, selector: "📚 Theory & Concepts"}
