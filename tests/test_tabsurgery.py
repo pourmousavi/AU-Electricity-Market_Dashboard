@@ -79,6 +79,71 @@ def test_rejects_source_without_tabs() -> None:
         select_tab("x = 1\n", "Alpha")
 
 
+MULTI_ITEM_FIXTURE = '''
+import contextlib
+import streamlit as st
+tab1, tab2 = st.tabs(["Alpha", "Beta"])
+with tab1, contextlib.nullcontext():
+    kept_a = 1
+with tab2:
+    kept_b = 2
+'''
+
+
+def test_rejects_tab_combined_with_another_context_manager() -> None:
+    """A `with tab1, other():` must be rejected, not silently skipped.
+
+    Regression test: the original implementation only matched `with` blocks
+    with exactly one item, so a tab variable combined with another context
+    manager in the same `with` statement was neither blanked nor rejected —
+    it silently survived untouched, contradicting the strict-failure design
+    intent.
+    """
+    with pytest.raises(TabSurgeryError, match="tab1"):
+        select_tab(MULTI_ITEM_FIXTURE, "Beta")
+
+
+SHADOWED_NAME_FIXTURE = '''
+import streamlit as st
+
+tab1, tab2 = st.tabs(["Alpha", "Beta"])
+
+
+def helper():
+    tab1 = some_other_context_manager()
+    with tab1:
+        untouched = 1
+    return untouched
+
+
+with tab1:
+    kept_alpha = 1
+with tab2:
+    kept_beta = 2
+'''
+
+
+def test_unrelated_nested_scope_with_shadowed_name_is_not_blanked() -> None:
+    """A same-named local in an unrelated nested scope must not be touched.
+
+    Regression test: the original implementation matched `with` blocks by
+    variable name alone via `ast.walk` over the whole tree, with no scope
+    confinement. A nested function that happens to bind a local also named
+    `tab1` had its unrelated `with tab1:` block blanked to `pass`, deleting
+    code that has nothing to do with tab isolation.
+    """
+    tree, _ = select_tab(SHADOWED_NAME_FIXTURE, "Beta")
+    compile(tree, "<test>", "exec")
+
+    func = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "helper"
+    )
+    inner_with = next(node for node in ast.walk(func) if isinstance(node, ast.With))
+    assert not isinstance(inner_with.body[0], ast.Pass)
+    assert isinstance(inner_with.body[0], ast.Assign)
+
+
 @pytest.mark.parametrize(
     "filename,selector,expected_index",
     [

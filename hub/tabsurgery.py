@@ -33,6 +33,23 @@ def _find_tabs_assignment(tree: ast.Module) -> ast.Assign:
     return assigns[0]
 
 
+def _find_enclosing_body(tree: ast.Module, target: ast.stmt) -> list[ast.stmt]:
+    """Return the statement list that directly contains `target`.
+
+    This confines later matching to the same scope as the `st.tabs(...)`
+    assignment (module level for Week 6, inside `main()` for Weeks 7/8)
+    rather than walking the whole tree, so an unrelated `with`-block in a
+    nested scope that happens to reuse a tab variable's name is never
+    touched.
+    """
+    for node in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            body = getattr(node, field, None)
+            if isinstance(body, list) and any(stmt is target for stmt in body):
+                return body
+    raise TabSurgeryError("could not locate the scope containing the st.tabs(...) assignment")
+
+
 def select_tab(source: str, selector: str) -> tuple[ast.Module, int]:
     """Blank every tab body except the one labelled `selector`.
 
@@ -68,12 +85,26 @@ def select_tab(source: str, selector: str) -> tuple[ast.Module, int]:
     index = labels.index(selector)
     keep = names[index]
 
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.With) and len(node.items) == 1
-                and isinstance(node.items[0].context_expr, ast.Name)):
-            name = node.items[0].context_expr.id
-            if name in names and name != keep:
-                node.body = [ast.Pass()]
+    scope_body = _find_enclosing_body(tree, assign)
+
+    for node in scope_body:
+        if not isinstance(node, ast.With):
+            continue
+        tab_items = [
+            item for item in node.items
+            if isinstance(item.context_expr, ast.Name) and item.context_expr.id in names
+        ]
+        if not tab_items:
+            continue
+        if len(node.items) != 1:
+            bad_name = tab_items[0].context_expr.id
+            raise TabSurgeryError(
+                f"tab variable {bad_name!r} is combined with another context "
+                "manager in a single `with` statement, which is not supported"
+            )
+        name = tab_items[0].context_expr.id
+        if name != keep:
+            node.body = [ast.Pass()]
 
     ast.fix_missing_locations(tree)
     return tree, index
