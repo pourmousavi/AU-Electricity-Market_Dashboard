@@ -65,6 +65,11 @@ def dark_page_css() -> str:
 .hub-title {{
   font-size: clamp(1.9rem, 4.2vw, 3.0rem); font-weight: 800;
   line-height: 1.06; margin: .35rem 0 .5rem;
+  /* Solid colour first: browsers without background-clip: text support (and
+     the .hub-title is applied to a <div>, which the .hub-dark h1/h2/h3/p/span
+     fallback rule below does not cover) must still render visible text. The
+     gradient below is a progressive enhancement on top of this. */
+  color: {p['text']};
   background: linear-gradient(96deg, {p['text']} 12%, {p['accent_soft']} 58%, {p['cyan']} 100%);
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }}
