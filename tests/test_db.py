@@ -115,3 +115,23 @@ def test_update_experiment_text(engine) -> None:
     row = db.get_experiment(engine, "w2.consumer_model")
     assert row["title"] == "Demand Curves"
     assert row["blurb"] == "Start here."
+
+
+def test_seed_does_not_rerun_when_topics_deleted_but_experiments_remain(engine) -> None:
+    """delete_topic deliberately keeps experiments (unassigned, disabled).
+
+    That leaves the topic table empty with the experiment table still
+    populated -- reachable purely through the shipped admin API (delete
+    every topic). seed_initial must not mistake that for a genuine
+    first-boot empty database and try to re-insert existing experiment ids.
+    """
+    cat = load_catalogue()
+    db.seed_initial(engine, cat)
+
+    for t in db.list_topics(engine, include_disabled=True):
+        db.delete_topic(engine, t["id"])
+
+    assert db.list_topics(engine, include_disabled=True) == []
+    assert len(db.list_experiments(engine, topic_id=None, include_disabled=True)) == 25
+
+    assert db.seed_initial(engine, cat) is False

@@ -89,10 +89,19 @@ def _default_title(experiment_id: str) -> str:
 def seed_initial(engine: Engine, catalogue: dict[str, Experiment]) -> bool:
     """Create the six week topics with every experiment assigned and enabled.
 
-    Only runs when the topic table is empty. Returns True if it seeded.
+    Only runs on a genuinely first-boot, empty database: both the topic
+    table AND the experiment table must be empty. `delete_topic` deletes
+    topics but deliberately keeps their experiments (unassigned, disabled),
+    so a topic table emptied that way must not be mistaken for first boot --
+    doing so would re-insert existing experiment ids and crash on the
+    primary key. Returns True if it seeded.
     """
     with engine.begin() as conn:
-        if conn.execute(select(func.count()).select_from(topic)).scalar_one() > 0:
+        topic_count = conn.execute(select(func.count()).select_from(topic)).scalar_one()
+        experiment_count = conn.execute(
+            select(func.count()).select_from(experiment)
+        ).scalar_one()
+        if topic_count > 0 or experiment_count > 0:
             return False
 
         topic_ids: dict[str, int] = {}
