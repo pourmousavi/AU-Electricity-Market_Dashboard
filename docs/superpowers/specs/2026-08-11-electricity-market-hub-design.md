@@ -18,7 +18,7 @@ files are vendored byte-for-byte and driven from outside via a rendering shim.
 ### Success criteria
 
 1. One public URL students can visit; no login.
-2. All 23 experiments reachable, rendering identically to their current standalone dashboards.
+2. All 25 experiments reachable, rendering identically to their current standalone dashboards.
 3. Instructor can assign any experiment to any topic, reorder, and toggle it on/off from an
    admin panel, with the change live immediately and no redeploy.
 4. Instructor can see unique visitors, sessions, per-experiment opens and dwell time.
@@ -51,9 +51,17 @@ networkx, pypsa`.
   must precede other output. The shim no-ops subsequent calls.
 - **Weeks 2/3/4 call `st.sidebar.selectbox` exactly once** (the nav dropdown). Inner dropdowns are
   `st.selectbox` in the main area and are never intercepted.
-- **Weeks 7/8 are guarded by `if __name__ == "__main__"`,** so importing them executes nothing.
-- **Week 6 has no guard** — its content runs at module level, so it cannot be split without
-  editing the file. It stays a single asset.
+- **Weeks 7/8 are guarded by `if __name__ == "__main__"`,** so importing them executes nothing;
+  `main()` must be called explicitly. **Week 6 has no guard** — its content runs at module level.
+- **Tab bodies are not uniformly functions.** Most of Weeks 7/8's tabs are a single
+  `render_*()` call, but Week 7's "Generator Setup" tab is `render_generator_table()` *plus* ~40
+  inline lines (setup metrics, demand-profile plot), Week 8's "Theory & Concepts" tab is ~110 lines
+  of inline markdown, and all three of Week 6's tabs are inline. Calling render functions is
+  therefore not a sufficient isolation mechanism — it would silently drop content.
+- **Content before the tab bar is shared context.** Weeks 7/8 render a header, learning objectives
+  and the sidebar in `main()` before `st.tabs`; Week 6 renders its primal/dual solver and 3D plot
+  before its tabs. This shared preamble renders for every experiment drawn from that module, which
+  is desirable — it gives each experiment its setup controls.
 - **Three session-state keys collide across modules:** `generators`, `supply_bids`, `demand_bids`.
 - **All modules hardcode light-coloured CSS boxes** (`background-color: white`, `#f0f8ff`,
   `#f8f9fa`) with default text colour. A global dark theme would render light text on light
@@ -61,35 +69,37 @@ networkx, pypsa`.
 
 ---
 
-## 3. Asset inventory — 23 experiments
+## 3. Asset inventory — 25 experiments
 
-| ID | Display name | Source | Isolation mode |
-|---|---|---|---|
-| `w2.consumer_model` | Consumer Model | week2 | `pin_selectbox` |
-| `w2.consumer_elasticity` | Consumer Elasticity | week2 | `pin_selectbox` |
-| `w2.supplier_model` | Supplier Model | week2 | `pin_selectbox` |
-| `w2.supplier_elasticity` | Supplier Elasticity | week2 | `pin_selectbox` |
-| `w2.market_equilibrium` | Market Equilibrium | week2 | `pin_selectbox` |
-| `w3.pool_pricing` | Pool Market Pricing | week3 | `pin_selectbox` |
-| `w3.market_power` | Market Power Analysis | week3 | `pin_selectbox` |
-| `w3.profit_cost_recovery` | Profit & Cost Recovery | week3 | `pin_selectbox` |
-| `w3.interactive_clearing` | Interactive Market Clearing | week3 | `pin_selectbox` |
-| `w4.nonlinear_3d` | 3D Nonlinear Optimization | week4 | `pin_selectbox` |
-| `w4.tools_comparison` | Modelling Tools Comparison | week4 | `pin_selectbox` |
-| `w6.duality` | Duality Theory (all tabs) | week6 | `whole` |
-| `w7.generator_setup` | Generator Setup | week7 | `call_function` |
-| `w7.comparison_results` | ED Comparison Results | week7 | `call_function` |
-| `w7.detailed_analysis` | ED Detailed Analysis | week7 | `call_function` |
-| `w7.individual_generators` | Individual Generators | week7 | `call_function` |
-| `w7.pareto` | Pareto Frontier | week7 | `call_function` |
-| `w8.market_setup` | Market Setup | week8 | `call_function` |
-| `w8.network_topology` | Network Topology | week8 | `call_function` |
-| `w8.market_results` | Market Results | week8 | `call_function` |
-| `w8.dc_opf_results` | DC OPF Results | week8 | `call_function` |
-| `w8.market_vs_opf` | Market vs DC OPF | week8 | `call_function` |
-| `w8.theory` | Theory & Concepts | week8 | `call_function` |
+| ID | Display name | Source | Mode | Selector / tab label |
+|---|---|---|---|---|
+| `w2.consumer_model` | Consumer Model | week2 | `pin_selectbox` | `Consumer Model` |
+| `w2.consumer_elasticity` | Consumer Elasticity | week2 | `pin_selectbox` | `Consumer Elasticity` |
+| `w2.supplier_model` | Supplier Model | week2 | `pin_selectbox` | `Supplier Model` |
+| `w2.supplier_elasticity` | Supplier Elasticity | week2 | `pin_selectbox` | `Supplier Elasticity` |
+| `w2.market_equilibrium` | Market Equilibrium | week2 | `pin_selectbox` | `Market Equilibrium` |
+| `w3.pool_pricing` | Pool Market Pricing | week3 | `pin_selectbox` | `Pool Market Pricing` |
+| `w3.market_power` | Market Power Analysis | week3 | `pin_selectbox` | `Market Power Analysis` |
+| `w3.profit_cost_recovery` | Profit & Cost Recovery | week3 | `pin_selectbox` | `Profit & Cost Recovery` |
+| `w3.interactive_clearing` | Interactive Market Clearing | week3 | `pin_selectbox` | `Interactive Market Clearing` |
+| `w4.nonlinear_3d` | 3D Nonlinear Optimization | week4 | `pin_selectbox` | `3D Nonlinear Optimization` |
+| `w4.tools_comparison` | Modelling Tools Comparison | week4 | `pin_selectbox` | `Modelling Tools Comparison` |
+| `w6.strong_duality` | Strong Duality | week6 | `pin_tab` | `Strong Duality` |
+| `w6.weak_duality` | Weak Duality Cases | week6 | `pin_tab` | `Weak Duality Cases` |
+| `w6.duality_theorems` | Duality Theorems | week6 | `pin_tab` | `Duality Theorems` |
+| `w7.generator_setup` | Generator Setup | week7 | `pin_tab` | `🏭 Generator Setup` |
+| `w7.comparison_results` | ED Comparison Results | week7 | `pin_tab` | `📊 Comparison Results` |
+| `w7.detailed_analysis` | ED Detailed Analysis | week7 | `pin_tab` | `🔍 Detailed Analysis` |
+| `w7.individual_generators` | Individual Generators | week7 | `pin_tab` | `📈 Individual Generators` |
+| `w7.pareto` | Pareto Frontier | week7 | `pin_tab` | `🎯 Pareto Frontier` |
+| `w8.market_setup` | Market Setup | week8 | `pin_tab` | `🏪 Market Setup` |
+| `w8.network_topology` | Network Topology | week8 | `pin_tab` | `🔌 Network Topology` |
+| `w8.market_results` | Market Results | week8 | `pin_tab` | `📈 Market Results` |
+| `w8.dc_opf_results` | DC OPF Results | week8 | `pin_tab` | `⚡ DC OPF Results` |
+| `w8.market_vs_opf` | Market vs DC OPF | week8 | `pin_tab` | `🔋 Market vs DC OPF` |
+| `w8.theory` | Theory & Concepts | week8 | `pin_tab` | `📚 Theory & Concepts` |
 
-Every one of these 23 is **individually assignable to any topic and individually toggleable**.
+Every one of these 25 is **individually assignable to any topic and individually toggleable**.
 Experiments originating from different source dashboards may be grouped on the same topic card.
 
 ---
@@ -116,13 +126,15 @@ experiments:
 
   - id: w7.pareto
     source: week7
-    mode: call_function
-    setup: [initialize_session_state, render_sidebar]
-    render: render_pareto_frontier
+    mode: pin_tab
+    selector: "🎯 Pareto Frontier"
+    entry: main          # call main() after executing the module
 
-  - id: w6.duality
+  - id: w6.strong_duality
     source: week6
-    mode: whole
+    mode: pin_tab
+    selector: "Strong Duality"
+    entry: module        # content runs at module level; nothing to call
 ```
 
 **Postgres `experiment` / `topic` tables** — describe *how to present* an experiment. Edited live
@@ -139,7 +151,7 @@ in the admin panel, effective immediately, no redeploy.
 
 `topic` holds `id, name, subtitle, sort_order, enabled, unlock_message`.
 
-**Initial seed (first deploy only):** six topics are created — Week 2, 3, 4, 6, 7, 8 — with all 23
+**Initial seed (first deploy only):** six topics are created — Week 2, 3, 4, 6, 7, 8 — with all 25
 experiments assigned to the topic matching their source dashboard, in their current order, and
 **enabled**. The instructor then disables whatever has not been taught yet from one screen of
 toggles, and rearranges from there.
@@ -151,20 +163,44 @@ listed in admin, so nothing vanishes silently.
 
 ### 4.2 Rendering shim — `hub/runner.py`
 
-One module, three modes, no edits to vendored sources.
+One module, two modes, no edits to vendored sources. Both modes guarantee that **only the selected
+experiment's code executes** — unselected content is never computed and never reaches the browser.
 
-- **Global:** `st.set_page_config` is replaced with a no-op for the duration of a vendored
-  module's execution (the hub calls the real one first).
-- **`pin_selectbox`:** temporarily replace `st.sidebar.selectbox` with a function that returns the
-  configured `selector` value on its **first** call and restores the original immediately after,
-  then execute the source file via `importlib`. Weeks 2/3/4 call it exactly once at top level, so
-  exactly one page's code path runs — output is identical to the standalone dashboard on that page.
-- **`call_function`:** import the module (its `__main__` guard means nothing executes), then call
-  each function named in `setup`, then the single function named in `render`.
-- **`whole`:** execute the source file unchanged (Week 6 only).
+**Global:** `st.set_page_config` is replaced with a no-op for the duration of a vendored module's
+execution (the hub calls the real one first).
 
-Modules are imported once and cached in `st.cache_resource`; re-running an experiment re-executes
-only the relevant code path, not the import.
+**`pin_selectbox`** — Weeks 2, 3, 4.
+Temporarily replace `st.sidebar.selectbox` with a function that returns the configured `selector`
+value on its **first** call and restores the original immediately after, then execute the source
+file. These modules call it exactly once at top level and dispatch with `if page == ...`, so
+exactly one page's code path runs. Output is identical to the standalone dashboard on that page.
+
+**`pin_tab`** — Weeks 6, 7, 8.
+Tab bodies contain inline code, so calling render functions is not sufficient. Instead the source
+is transformed **in memory** at load time via Python's `ast` module — the file on disk is never
+modified:
+
+1. Parse the source. Find the `Assign` node whose value is a call to `st.tabs`, read the tuple of
+   target names (`tab1, tab2, tab3`) and the literal label list, and map label → target name.
+2. Find every `With` node whose sole context expression is one of those names. For every name that
+   is **not** the selected experiment, replace the body with `ast.Pass()`.
+3. Compile and execute the transformed tree. At runtime `st.tabs` is monkeypatched to call the real
+   `st.tabs` with only the selected label and return a list where the selected position holds the
+   real container and every other position holds a `contextlib.nullcontext()` — those positions are
+   only ever entered by a `pass` body.
+4. If `entry: main`, call `main()`; if `entry: module`, module-level execution has already done it.
+
+The result is that the module's shared preamble (header, learning objectives, sidebar controls)
+renders exactly as today, followed by the one selected tab's content, with a single tab header.
+Unselected tabs are not executed — so Week 8's DC OPF solve does not run when a student is reading
+the Theory tab, and disabled experiments are never computed.
+
+Transformed code objects are cached per `(source, experiment_id)` in `st.cache_resource`, so the
+AST work happens once per experiment per app boot.
+
+**Failure mode:** if a source dashboard is later restructured so the expected `st.tabs` assignment
+or `with tabN:` pattern is absent, the transform raises rather than silently rendering the wrong
+content. The smoke test in §9 catches this before deploy.
 
 ### 4.3 Session-state isolation
 
@@ -201,7 +237,7 @@ sources/
 scripts/
   sync_sources.py           # re-pull latest from the six upstream repos
 tests/
-  test_experiments_render.py    # AppTest smoke test over all 23
+  test_experiments_render.py    # AppTest smoke test over all 25
 requirements.txt
 .streamlit/config.toml
 ```
@@ -249,10 +285,11 @@ A disabled experiment or topic still appears, with a padlock. Clicking opens a s
 showing the title, blurb and the instructor's `unlock_message` (e.g. "Opens after the Week 6
 lecture"). No interactive content is rendered.
 
-**Honest limitation:** this is presentation-level gating, not security. Disabled experiments are
-not rendered server-side, so their content is genuinely not sent to the browser — but the
-catalogue ids and titles are visible in the page. Adequate for pacing coursework, not for
-protecting assessment material.
+**What is and isn't protected:** a disabled experiment's code never executes and its output never
+reaches the browser — both isolation modes gate by *not running* the code, not by hiding it. What
+a determined student can see is the experiment's title, blurb and unlock message, since those are
+rendered on the teaser page by design. That is adequate for pacing coursework. It is not an
+access-control system, and assessment material should not rely on it.
 
 ---
 
@@ -344,7 +381,7 @@ GitHub Pages was considered and rejected: it serves static files only and cannot
 ## 9. Testing
 
 - **`tests/test_experiments_render.py`** — uses `streamlit.testing.v1.AppTest` to load every one of
-  the 23 experiments and assert no exception is raised. This is the regression check that catches a
+  the 25 experiments and assert no exception is raised. This is the regression check that catches a
   shim breaking when a source dashboard is updated via `sync_sources.py`.
 - **Runner unit checks** — `pin_selectbox` restores the original `st.sidebar.selectbox` after the
   first call; state isolation clears foreign module keys and preserves `_hub.*` keys.
@@ -360,9 +397,9 @@ GitHub Pages was considered and rejected: it serves static files only and cannot
 | `X-Forwarded-For` unavailable on Community Cloud | Cannot count unique IPs | Spike first; fall back to query-param device ID and relabel the metric |
 | Session-state collision across modules | Crash on module switch | Snapshot-and-clear on source change; smoke test covers switching |
 | PyPSA/CVXPY memory on free tier | App restarts under load | Fallback to Hugging Face Spaces, same repo |
-| Upstream dashboard edited, breaks the shim | Experiment fails to render | `sync_sources.py` + AppTest smoke test before deploy |
-| Week 6 cannot be split | Coarser control for one module | Accepted; splitting would require editing the source |
-| Locked content is presentation-level only | Titles visible, content is not | Documented; do not use for assessment material |
+| Upstream dashboard edited, breaks the shim | Experiment fails to render | AST transform raises loudly rather than rendering wrong content; `sync_sources.py` + AppTest smoke test before deploy |
+| AST transform is coupled to the `tab1, tab2 = st.tabs([...])` / `with tabN:` pattern | `pin_tab` experiments fail | Pattern verified present in all three tab modules; transform asserts on the pattern and the smoke test covers all 25 experiments |
+| Locked content: titles visible, content never executes | Low | Documented; do not use for assessment material |
 
 ---
 
@@ -372,4 +409,3 @@ GitHub Pages was considered and rejected: it serves static files only and cannot
 - Student accounts, verified identity, per-student progress tracking.
 - Scheduled/automatic unlock dates (manual toggle only, by decision).
 - Retiring the six upstream repos — they remain the sources of truth.
-- Splitting Week 6 into its three tabs.
