@@ -173,8 +173,8 @@ def _render_content(engine, catalogue) -> None:
         ):
             if row["orphaned"]:
                 st.warning(
-                    "This experiment is no longer in catalogue.yaml. It is hidden "
-                    "from students but kept so its settings are not lost."
+                    "This experiment no longer has a module in experiments/. It "
+                    "is hidden from students but kept so its settings are not lost."
                 )
             title = st.text_input("Title", row["title"], key=f"_hub.et_{exp_id}")
             blurb = st.text_area(

@@ -10,8 +10,8 @@ def test_topic_route_parses_integer_id() -> None:
 
 
 def test_experiment_route_keeps_id_string() -> None:
-    route = parse_route({"view": "experiment", "exp": "w7.pareto"})
-    assert route == Route("experiment", None, "w7.pareto")
+    route = parse_route({"view": "experiment", "exp": "dispatch_pareto_frontier"})
+    assert route == Route("experiment", None, "dispatch_pareto_frontier")
 
 
 def test_admin_route() -> None:
@@ -38,6 +38,6 @@ def test_route_params_round_trip() -> None:
     for route in (
         Route("home", None, None),
         Route("topic", 7, None),
-        Route("experiment", None, "w2.consumer_model"),
+        Route("experiment", None, "consumer_model"),
     ):
         assert parse_route(route_params(route)) == route

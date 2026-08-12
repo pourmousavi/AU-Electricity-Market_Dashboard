@@ -14,7 +14,7 @@ CATALOGUE = load_catalogue()
 
 
 def _row(**overrides) -> dict:
-    row = {"experiment_id": "w2.consumer_model", "title": "Consumer Model",
+    row = {"experiment_id": "consumer_model", "title": "Consumer Model",
            "blurb": "", "enabled": True, "orphaned": False,
            "topic_id": 1, "sort_order": 0}
     row.update(overrides)
@@ -43,7 +43,7 @@ def test_orphaned_experiment_is_refused() -> None:
 
 
 def test_row_without_catalogue_entry_is_orphaned() -> None:
-    status, _ = resolve_access(_row(experiment_id="w9.gone"), CATALOGUE)
+    status, _ = resolve_access(_row(experiment_id="gone"), CATALOGUE)
     assert status == "orphaned"
 
 
@@ -121,9 +121,20 @@ def test_topic_gate_does_not_disturb_the_existing_check_order(
 
 @pytest.fixture()
 def engine():
+    """A database in the state the coordinator would have left it in.
+
+    seed_initial parks everything unsorted and switched off, so these tests
+    do what the admin panel does: put the experiment in a live topic and turn
+    it on. Without that every case below would be refused before reaching the
+    behaviour under test.
+    """
     eng = create_engine("sqlite://")
     db.bootstrap(eng)
     db.seed_initial(eng, CATALOGUE)
+    topic_id = db.upsert_topic(eng, None, "Week 2", "", "", 0, True)
+    for exp_id in CATALOGUE:
+        db.assign_experiment(eng, exp_id, topic_id, 0)
+        db.set_experiment_enabled(eng, exp_id, True)
     return eng
 
 
@@ -156,7 +167,7 @@ def test_render_error_does_not_call_st_exception_and_reports_instead(
     `experiment_error` analytics event the coordinator can see in the admin
     panel -- not as `st.exception(exc)` on the public page.
     """
-    experiment_id = "w2.consumer_model"
+    experiment_id = "consumer_model"
     st.session_state[analytics.SESSION_KEY] = "test-session"
 
     def _boom(_exp) -> None:
@@ -194,7 +205,7 @@ def test_direct_url_to_enabled_experiment_in_disabled_topic_does_not_render(
     a bookmarked ?view=experiment&exp=... link must not still get the full
     experiment. The experiment row itself stays enabled -- that is the point.
     """
-    experiment_id = "w2.consumer_model"
+    experiment_id = "consumer_model"
     row = db.get_experiment(engine, experiment_id)
     assert row["enabled"] and row["topic_id"] is not None
 
@@ -233,7 +244,7 @@ def test_generic_vendored_exception_is_caught_logged_and_tracked(
     client.showErrorDetails at its default, rendered the traceback and the
     absolute deployment path on a public page.
     """
-    experiment_id = "w2.consumer_model"
+    experiment_id = "consumer_model"
     st.session_state[analytics.SESSION_KEY] = "test-session"
 
     def _boom(_exp) -> None:
@@ -292,7 +303,7 @@ def test_keyboard_interrupt_is_not_swallowed(monkeypatch, engine) -> None:
 
     with pytest.raises(KeyboardInterrupt):
         pages_experiment.render_experiment_page(
-            engine, "w2.consumer_model", CATALOGUE
+            engine, "consumer_model", CATALOGUE
         )
 
 
@@ -309,7 +320,7 @@ def test_close_previous_with_no_current_experiment_flushes_and_clears(engine) ->
     exactly one experiment_close event -- so an admin-panel visit can never
     silently be absorbed into an experiment's dwell time.
     """
-    previous_id = "w2.consumer_model"
+    previous_id = "consumer_model"
     st.session_state[pages_experiment.OPEN_EXP_KEY] = previous_id
     st.session_state[pages_experiment.OPEN_TS_KEY] = analytics.now_ms() - 1234
     st.session_state[analytics.SESSION_KEY] = "test-session"

@@ -18,9 +18,18 @@ CATALOGUE = load_catalogue()
 
 @pytest.fixture()
 def engine():
+    """A database in the state the coordinator would have left it in.
+
+    seed_initial parks everything unsorted and switched off, so the fixture
+    does what the admin panel does and switches the experiments on -- an
+    unconfirmed delete disabling them is only observable if something was
+    enabled to begin with.
+    """
     eng = create_engine("sqlite://")
     db.bootstrap(eng)
     db.seed_initial(eng, CATALOGUE)
+    for exp_id in CATALOGUE:
+        db.set_experiment_enabled(eng, exp_id, True)
     return eng
 
 

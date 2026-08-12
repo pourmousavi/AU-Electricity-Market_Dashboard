@@ -59,18 +59,6 @@ event = Table(
     Column("dwell_ms", Integer, nullable=True),
 )
 
-# Default titles for the initial seed, derived from the catalogue id.
-_SEED_TOPICS = ["week2", "week3", "week4", "week6", "week7", "week8"]
-_TOPIC_NAMES = {
-    "week2": ("Week 2", "Consumer and supplier models, elasticity, equilibrium"),
-    "week3": ("Week 3", "Pricing, market power, profit and cost recovery, bidding"),
-    "week4": ("Week 4", "Optimisation problems and modelling tool comparison"),
-    "week6": ("Week 6", "Linear programming duality"),
-    "week7": ("Week 7", "Economic dispatch and value of interrupted use"),
-    "week8": ("Week 8", "Power flow and the double-sided auction"),
-}
-
-
 @st.cache_resource(show_spinner=False)
 def get_engine() -> Engine:
     """Engine for the configured Neon database."""
@@ -82,12 +70,17 @@ def bootstrap(engine: Engine) -> None:
 
 
 def _default_title(experiment_id: str) -> str:
-    tail = experiment_id.split(".", 1)[-1]
-    return tail.replace("_", " ").title()
+    return experiment_id.replace("_", " ").title()
 
 
 def seed_initial(engine: Engine, catalogue: dict[str, Experiment]) -> bool:
-    """Create the six week topics with every experiment assigned and enabled.
+    """Park every experiment in one disabled topic for the admin to sort.
+
+    An experiment module carries no opinion about where it belongs on the
+    site, so there is nothing to derive a topic layout from -- the layout is
+    the coordinator's, made in the admin panel. The seed just makes sure
+    nothing is invisible there, and reaches no student until it is placed
+    deliberately.
 
     Only runs on a genuinely first-boot, empty database: both the topic
     table AND the experiment table must be empty. `delete_topic` deletes
@@ -104,28 +97,17 @@ def seed_initial(engine: Engine, catalogue: dict[str, Experiment]) -> bool:
         if topic_count > 0 or experiment_count > 0:
             return False
 
-        topic_ids: dict[str, int] = {}
-        for order, key in enumerate(_SEED_TOPICS):
-            name, subtitle = _TOPIC_NAMES[key]
-            result = conn.execute(insert(topic).values(
-                name=name, subtitle=subtitle,
-                unlock_message="Available after the lecture for this week.",
-                sort_order=order, enabled=True,
-            ))
-            topic_ids[key] = int(result.inserted_primary_key[0])
+        result = conn.execute(insert(topic).values(
+            name="Unsorted", subtitle="Assign these to topics in the admin panel.",
+            unlock_message="Not available yet.", sort_order=0, enabled=False,
+        ))
+        unsorted_id = int(result.inserted_primary_key[0])
 
-        per_topic_order: dict[str, int] = {}
-        for exp in catalogue.values():
-            order = per_topic_order.get(exp.source_key, 0)
-            per_topic_order[exp.source_key] = order + 1
+        for order, exp in enumerate(catalogue.values()):
             conn.execute(insert(experiment).values(
-                experiment_id=exp.id,
-                topic_id=topic_ids.get(exp.source_key),
-                title=_default_title(exp.id),
-                blurb="",
-                sort_order=order,
-                enabled=True,
-                orphaned=False,
+                experiment_id=exp.id, topic_id=unsorted_id,
+                title=_default_title(exp.id), blurb="",
+                sort_order=order, enabled=False, orphaned=False,
             ))
     return True
 

@@ -25,15 +25,15 @@ def engine():
         base = {"experiment_id": None, "dwell_ms": None, "ts": now}
         conn.execute(insert(db.event), [
             base | {"session_id": "s1", "kind": "experiment_open",
-                    "experiment_id": "w2.consumer_model"},
+                    "experiment_id": "consumer_model"},
             base | {"session_id": "s2", "kind": "experiment_open",
-                    "experiment_id": "w2.consumer_model"},
+                    "experiment_id": "consumer_model"},
             base | {"session_id": "s3", "kind": "experiment_open",
-                    "experiment_id": "w7.pareto"},
+                    "experiment_id": "dispatch_pareto_frontier"},
             base | {"session_id": "s1", "kind": "experiment_close",
-                    "experiment_id": "w2.consumer_model", "dwell_ms": 10_000},
+                    "experiment_id": "consumer_model", "dwell_ms": 10_000},
             base | {"session_id": "s2", "kind": "experiment_close",
-                    "experiment_id": "w2.consumer_model", "dwell_ms": 30_000},
+                    "experiment_id": "consumer_model", "dwell_ms": 30_000},
             base | {"session_id": "s1", "kind": "home_view"},
         ])
     return eng
@@ -51,7 +51,7 @@ def test_experiment_opens_excludes_other_event_kinds(engine) -> None:
 
 def test_ranking_orders_by_opens(engine) -> None:
     ranking = queries.experiment_ranking(engine, days=30)
-    assert ranking[0]["experiment_id"] == "w2.consumer_model"
+    assert ranking[0]["experiment_id"] == "consumer_model"
     assert ranking[0]["opens"] == 2
 
 
@@ -62,13 +62,15 @@ def test_ranking_uses_display_title_from_database(engine) -> None:
 
 def test_ranking_reports_median_dwell_in_seconds(engine) -> None:
     ranking = queries.experiment_ranking(engine, days=30)
-    top = next(r for r in ranking if r["experiment_id"] == "w2.consumer_model")
+    top = next(r for r in ranking if r["experiment_id"] == "consumer_model")
     assert top["median_dwell_s"] == pytest.approx(20.0)
 
 
 def test_ranking_handles_experiments_with_no_close_event(engine) -> None:
     ranking = queries.experiment_ranking(engine, days=30)
-    pareto = next(r for r in ranking if r["experiment_id"] == "w7.pareto")
+    pareto = next(
+        r for r in ranking if r["experiment_id"] == "dispatch_pareto_frontier"
+    )
     assert pareto["opens"] == 1
     assert pareto["median_dwell_s"] is None
 
