@@ -199,7 +199,12 @@ def create_market_equilibrium_plot(supply_bids, demand_bids, analysis_points):
             demand_x.append(bid['cumulative_quantity'])
             demand_y.append(demand_bids[demand_bids.index(bid) + 1]['price'])
     
-    # Extend demand curve to x-axis
+    # Extend demand curve to x-axis: drop vertically at the last bid, then run
+    # flat. Appending only the far point drew one diagonal from the last bid's
+    # price down to zero, which is the one segment of the stack that did not
+    # look like a step.
+    demand_x.append(demand_bids[-1]['cumulative_quantity'])
+    demand_y.append(0)
     demand_x.append(max_qty * 1.2)
     demand_y.append(0)
     
