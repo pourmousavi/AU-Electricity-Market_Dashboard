@@ -75,7 +75,7 @@ def render_sidebar_nav(engine, route: Route) -> None:
     """Hub navigation above whatever the vendored module puts in the sidebar."""
     with st.sidebar:
         st.markdown("### ⚡ Course Modules")
-        if st.button("Home", use_container_width=True, key="_hub.nav_home"):
+        if st.button("Home", width="stretch", key="_hub.nav_home"):
             go(Route("home", None, None))
 
         for topic in db.list_topics(engine, include_disabled=False):
@@ -89,7 +89,7 @@ def render_sidebar_nav(engine, route: Route) -> None:
                     active = exp["experiment_id"] == route.experiment_id
                     label = ("▸ " if active else "") + exp["title"]
                     if st.button(
-                        label, use_container_width=True,
+                        label, width="stretch",
                         key=f"_hub.nav_{exp['experiment_id']}",
                     ):
                         go(Route("experiment", None, exp["experiment_id"]))

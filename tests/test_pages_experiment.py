@@ -56,6 +56,59 @@ def test_orphaned_takes_precedence_over_disabled(status_row, expected) -> None:
     assert status == expected
 
 
+def _topic(**overrides) -> dict:
+    row = {"id": 1, "name": "Week 2", "subtitle": "", "unlock_message": "",
+           "sort_order": 0, "enabled": True}
+    row.update(overrides)
+    return row
+
+
+def test_enabled_experiment_in_disabled_topic_is_refused() -> None:
+    """A bookmarked ?view=experiment URL must not walk past a closed week.
+
+    topic.enabled is a hard gate in pages_student.topic_status, so the whole
+    week reads as locked in the UI. Every experiment is also a shareable URL,
+    so those links are already in circulation.
+    """
+    status, message = resolve_access(
+        _row(), CATALOGUE, _topic(enabled=False, unlock_message="Opens in week 2.")
+    )
+    assert status == "disabled"
+    assert message == "Opens in week 2."
+
+
+def test_disabled_topic_without_unlock_message_falls_back() -> None:
+    status, message = resolve_access(
+        _row(), CATALOGUE, _topic(enabled=False, unlock_message="")
+    )
+    assert status == "disabled"
+    assert message == pages_experiment.DISABLED_MESSAGE
+
+
+def test_enabled_topic_leaves_an_enabled_experiment_open() -> None:
+    status, _ = resolve_access(_row(), CATALOGUE, _topic(enabled=True))
+    assert status == "ok"
+
+
+def test_unassigned_experiment_is_unaffected_by_the_topic_gate() -> None:
+    """topic_id is nullable; no parent topic means no parent gate."""
+    status, _ = resolve_access(_row(topic_id=None), CATALOGUE, None)
+    assert status == "ok"
+
+
+@pytest.mark.parametrize("row_overrides,expected", [
+    ({"orphaned": True}, "orphaned"),
+    ({"enabled": False}, "disabled"),
+])
+def test_topic_gate_does_not_disturb_the_existing_check_order(
+    row_overrides, expected
+) -> None:
+    status, _ = resolve_access(
+        _row(**row_overrides), CATALOGUE, _topic(enabled=False)
+    )
+    assert status == expected
+
+
 # --- Fix round 1 --------------------------------------------------------
 #
 # hub.pages_experiment renders through real (but bare-mode, no live runtime)
@@ -130,6 +183,117 @@ def test_render_error_does_not_call_st_exception_and_reports_instead(
         ).all()
     assert len(rows) == 1
     assert rows[0]._mapping["experiment_id"] == experiment_id
+
+
+def test_direct_url_to_enabled_experiment_in_disabled_topic_does_not_render(
+    monkeypatch, engine
+) -> None:
+    """Whole-week switch-off must close the experiment's own URL too.
+
+    The coordinator sees the week locked everywhere in the UI; a student with
+    a bookmarked ?view=experiment&exp=... link must not still get the full
+    experiment. The experiment row itself stays enabled -- that is the point.
+    """
+    experiment_id = "w2.consumer_model"
+    row = db.get_experiment(engine, experiment_id)
+    assert row["enabled"] and row["topic_id"] is not None
+
+    topic = {t["id"]: t for t in db.list_topics(engine, include_disabled=True)}[
+        row["topic_id"]
+    ]
+    db.upsert_topic(
+        engine, topic["id"], topic["name"], topic["subtitle"],
+        "Week 2 opens after the lecture.", topic["sort_order"], False,
+    )
+
+    assert resolve_access(
+        db.get_experiment(engine, experiment_id), CATALOGUE,
+        {t["id"]: t for t in db.list_topics(engine, include_disabled=True)}[
+            row["topic_id"]
+        ],
+    ) == ("disabled", "Week 2 opens after the lecture.")
+
+    render_spy = Mock()
+    monkeypatch.setattr(pages_experiment, "render_experiment", render_spy)
+    pages_experiment.render_experiment_page(engine, experiment_id, CATALOGUE)
+
+    assert render_spy.called is False, (
+        "a disabled topic must stop the vendored code from executing at all"
+    )
+    assert pages_experiment.OPEN_EXP_KEY not in st.session_state
+
+
+def test_generic_vendored_exception_is_caught_logged_and_tracked(
+    monkeypatch, engine, caplog
+) -> None:
+    """Vendored dashboards raise their own errors, not ExperimentRenderError.
+
+    A cvxpy solver failure or a numpy error from an out-of-range slider is a
+    plain ValueError. Before this fix it propagated to Streamlit and, with
+    client.showErrorDetails at its default, rendered the traceback and the
+    absolute deployment path on a public page.
+    """
+    experiment_id = "w2.consumer_model"
+    st.session_state[analytics.SESSION_KEY] = "test-session"
+
+    def _boom(_exp) -> None:
+        raise ValueError("solver did not converge")
+
+    monkeypatch.setattr(pages_experiment, "render_experiment", _boom)
+    error_spy = Mock()
+    exception_spy = Mock()
+    monkeypatch.setattr(pages_experiment.st, "error", error_spy)
+    monkeypatch.setattr(pages_experiment.st, "exception", exception_spy)
+
+    with caplog.at_level(logging.ERROR, logger="hub.pages_experiment"):
+        pages_experiment.render_experiment_page(engine, experiment_id, CATALOGUE)
+
+    assert exception_spy.called is False
+    assert error_spy.called is True, "the student must get the friendly message"
+    assert "reported automatically" in error_spy.call_args.args[0]
+
+    assert any(
+        r.name == "hub.pages_experiment" and r.exc_info for r in caplog.records
+    ), "the failure must be logged server-side with exception info"
+
+    analytics.flush(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(db.event).where(db.event.c.kind == "experiment_error")
+        ).all()
+    assert len(rows) == 1
+    assert rows[0]._mapping["experiment_id"] == experiment_id
+
+
+def test_client_error_details_are_suppressed_in_deployed_config() -> None:
+    """The backstop for anything raised outside the try block above.
+
+    Streamlit defaults client.showErrorDetails to "full", which would put the
+    exception, the absolute deployment path and a source excerpt on a public
+    page with no login.
+    """
+    import tomllib
+    from pathlib import Path
+
+    config = tomllib.loads(
+        (Path(__file__).resolve().parent.parent / ".streamlit" / "config.toml")
+        .read_text(encoding="utf-8")
+    )
+    assert config["client"]["showErrorDetails"] == "none"
+
+
+def test_keyboard_interrupt_is_not_swallowed(monkeypatch, engine) -> None:
+    """`except Exception` must stay narrower than BaseException."""
+    def _interrupt(_exp) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pages_experiment, "render_experiment", _interrupt)
+    st.session_state[analytics.SESSION_KEY] = "test-session"
+
+    with pytest.raises(KeyboardInterrupt):
+        pages_experiment.render_experiment_page(
+            engine, "w2.consumer_model", CATALOGUE
+        )
 
 
 def test_close_previous_with_no_current_experiment_flushes_and_clears(engine) -> None:

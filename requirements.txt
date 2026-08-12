@@ -1,4 +1,19 @@
-streamlit>=1.40,<2
+# Streamlit Community Cloud reinstalls from this file on every rebuild, so the
+# range here is the deployed version, not a suggestion.
+#   >=1.55 : hub/admin.py passes key= to st.expander and st.tabs. That
+#            parameter was added in 1.55.0 -- verified against the published
+#            wheels, not from memory: 1.50.0, 1.52.0, 1.53.0 and 1.54.0 all
+#            take (label, expanded, *, icon, width) with no key, and 1.55.0 is
+#            the first that accepts it. Anything in [1.40, 1.54] therefore
+#            raises TypeError and takes the whole admin panel down while the
+#            student site still looks perfectly fine.
+#            (tests/test_admin.py asserts the installed version can do this.)
+#   <1.62  : use_container_width is deprecated as of 1.61 and slated for
+#            removal; the hub itself now uses width="stretch", but the six
+#            vendored dashboards under sources/ still use use_container_width
+#            and must never be edited. Lift this ceiling only together with a
+#            re-vendor.
+streamlit>=1.55,<1.62
 pandas>=2.0.0
 numpy>=1.24.0
 plotly>=5.15.0

@@ -13,7 +13,7 @@ import streamlit as st
 from hub import analytics, db, theme
 from hub.catalogue import Experiment
 from hub.router import Route, go
-from hub.runner import ExperimentRenderError, render_experiment
+from hub.runner import render_experiment
 
 OPEN_TS_KEY = "_hub.open_ts"
 OPEN_EXP_KEY = "_hub.open_exp"
@@ -21,14 +21,30 @@ OPEN_EXP_KEY = "_hub.open_exp"
 logger = logging.getLogger(__name__)
 
 
-def resolve_access(row: dict | None, catalogue: dict[str, Experiment]) -> tuple[str, str]:
-    """Decide whether this experiment may render."""
+DISABLED_MESSAGE = "This experiment is not available yet."
+
+
+def resolve_access(
+    row: dict | None,
+    catalogue: dict[str, Experiment],
+    topic: dict | None = None,
+) -> tuple[str, str]:
+    """Decide whether this experiment may render.
+
+    `topic` is the experiment's parent topic row. Switching a whole week off is
+    a hard gate everywhere else on the site (see pages_student.topic_status),
+    so it must close the experiment's own URL too — every experiment here is a
+    shareable link, so bookmarked and forwarded ?view=experiment URLs exist and
+    would otherwise walk straight past a disabled week.
+    """
     if row is None:
         return "missing", "That experiment does not exist."
     if row.get("orphaned") or row["experiment_id"] not in catalogue:
         return "orphaned", "That experiment is no longer part of the course site."
     if not row.get("enabled"):
-        return "disabled", "This experiment is not available yet."
+        return "disabled", DISABLED_MESSAGE
+    if topic is not None and not topic.get("enabled"):
+        return "disabled", topic.get("unlock_message") or DISABLED_MESSAGE
     return "ok", ""
 
 
@@ -48,7 +64,9 @@ def close_previous(engine, current_experiment_id: str | None) -> None:
 
 def render_experiment_page(engine, experiment_id: str, catalogue: dict) -> None:
     row = db.get_experiment(engine, experiment_id)
-    status, message = resolve_access(row, catalogue)
+    topics = {t["id"]: t for t in db.list_topics(engine, include_disabled=True)}
+    topic = topics.get(row["topic_id"]) if row else None
+    status, message = resolve_access(row, catalogue, topic)
 
     if status != "ok":
         theme.inject(theme.dark_page_css())
@@ -63,8 +81,7 @@ def render_experiment_page(engine, experiment_id: str, catalogue: dict) -> None:
             go(Route("home", None, None))
         return
 
-    topics = {t["id"]: t for t in db.list_topics(engine, include_disabled=True)}
-    topic = topics.get(row["topic_id"]) or {"name": "Unassigned", "id": None}
+    topic = topic or {"name": "Unassigned", "id": None}
 
     if st.session_state.get(OPEN_EXP_KEY) != experiment_id:
         st.session_state[OPEN_EXP_KEY] = experiment_id
@@ -86,12 +103,20 @@ def render_experiment_page(engine, experiment_id: str, catalogue: dict) -> None:
 
     try:
         render_experiment(catalogue[experiment_id])
-    except ExperimentRenderError as exc:
+    except Exception:
         # This page is public with no login -- students, not the coordinator,
         # are the audience. A full traceback (source paths, library internals,
         # local frames) must never render here. The detail goes to the server
         # log and to an analytics event the coordinator can see in the admin
         # panel instead.
+        #
+        # Deliberately `Exception`, not just ExperimentRenderError: the
+        # vendored dashboards raise their own failures straight through --
+        # a cvxpy solver failure, a PyPSA non-convergence, a numpy error from
+        # an out-of-range slider -- and those are exactly the cases a student
+        # can trigger by moving a widget. `Exception` still lets
+        # KeyboardInterrupt and SystemExit (BaseException) through, which is
+        # what we want; do not broaden this to BaseException.
         logger.exception("experiment %s failed to render", experiment_id)
         analytics.track(engine, "experiment_error", experiment_id=experiment_id)
         st.error(

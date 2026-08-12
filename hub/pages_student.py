@@ -72,7 +72,7 @@ def render_home(engine) -> None:
                 unsafe_allow_html=True,
             )
             label = "Open" if is_open else "Preview"
-            if st.button(label, key=f"_hub.card_{topic['id']}", use_container_width=True):
+            if st.button(label, key=f"_hub.card_{topic['id']}", width="stretch"):
                 go(Route("topic", topic["id"], None))
 
     st.caption(
@@ -122,7 +122,7 @@ def render_topic(engine, topic_id: int) -> None:
             )
             if st.button(
                 "Open experiment", key=f"_hub.exp_{exp['experiment_id']}",
-                use_container_width=True,
+                width="stretch",
             ):
                 go(Route("experiment", None, exp["experiment_id"]))
 

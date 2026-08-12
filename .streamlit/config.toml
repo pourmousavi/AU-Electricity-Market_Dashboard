@@ -7,3 +7,11 @@ textColor = "#111827"
 
 [server]
 runOnSave = false
+
+[client]
+# Public site, no login: an uncaught exception must never show students a
+# traceback, absolute deployment paths or a source excerpt. The hub catches
+# render failures itself (hub/pages_experiment.py) and reports them to the
+# server log plus an analytics event; this is the backstop for anything
+# raised outside that try block. Default is "full".
+showErrorDetails = "none"

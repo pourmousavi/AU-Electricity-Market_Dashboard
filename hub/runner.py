@@ -18,6 +18,7 @@ Never edit anything under sources/.
 from __future__ import annotations
 
 import contextlib
+import threading
 import types
 from pathlib import Path
 from types import CodeType
@@ -28,6 +29,28 @@ from hub.catalogue import Experiment
 from hub.state import isolate
 from hub.tabsurgery import TabSurgeryError, select_tab
 
+# Streamlit runs one thread per browser session against a single process-wide
+# `streamlit` module, and takes no global script lock. The shims below patch
+# that shared module, and the window they are installed for spans the entire
+# exec() of a vendored dashboard -- seconds, once a PyPSA or cvxpy solve is in
+# it. Two students in the same tutorial therefore overlap as a matter of
+# course, not as a rare race.
+#
+# Two independent defences, because neither is sufficient alone:
+#
+#   1. This lock, held across the whole patched block, so shims never nest.
+#      Without it, session B captures session A's *shim* as its "original" and
+#      faithfully reinstalls it on exit -- permanently. Every later session in
+#      the process then gets A's shim: a stale pin_tab index that raises
+#      IndexError out of hub.admin's three-label st.tabs call, or a
+#      set_page_config no-op that silently drops layout="wide".
+#
+#   2. An owner-thread check inside each shim, so a session that calls
+#      st.tabs / st.sidebar.selectbox / st.set_page_config while another
+#      session holds the lock gets the genuine function rather than someone
+#      else's pin.
+_RENDER_LOCK = threading.RLock()
+
 
 class ExperimentRenderError(Exception):
     """An experiment could not be rendered from its source."""
@@ -37,7 +60,14 @@ class ExperimentRenderError(Exception):
 def _no_page_config():
     """Vendored modules all call st.set_page_config; only the hub may."""
     original = st.set_page_config
-    st.set_page_config = lambda *args, **kwargs: None
+    owner = threading.get_ident()
+
+    def shim(*args, **kwargs):
+        if threading.get_ident() != owner:
+            return original(*args, **kwargs)
+        return None
+
+    st.set_page_config = shim
     try:
         yield
     finally:
@@ -52,10 +82,13 @@ def _pinned_selectbox(selector: str):
     area are untouched, and any later sidebar dropdown behaves normally.
     """
     original = st.sidebar.selectbox
+    owner = threading.get_ident()
     used = {"value": False}
 
     def shim(label, options, *args, **kwargs):
-        if used["value"]:
+        # Another session's call must neither be pinned to this experiment nor
+        # consume this experiment's one-shot interception.
+        if threading.get_ident() != owner or used["value"]:
             return original(label, options, *args, **kwargs)
         used["value"] = True
         if selector not in list(options):
@@ -75,8 +108,11 @@ def _pinned_selectbox(selector: str):
 def _pinned_tabs(index: int, selector: str):
     """Draw a single tab, and hand back nullcontexts for the blanked ones."""
     original = st.tabs
+    owner = threading.get_ident()
 
     def shim(labels, *args, **kwargs):
+        if threading.get_ident() != owner:
+            return original(labels, *args, **kwargs)
         real = original([selector], *args, **kwargs)[0]
         out: list = [contextlib.nullcontext() for _ in labels]
         out[index] = real
@@ -120,17 +156,20 @@ def render_experiment(exp: Experiment) -> None:
     module.__file__ = str(exp.source_path)
     module.__dict__["__name__"] = "_hub_vendored"  # keeps __main__ guards shut
 
-    with _no_page_config():
-        if exp.mode == "pin_selectbox":
-            with _pinned_selectbox(exp.selector):
-                exec(code, module.__dict__)
-        else:
-            with _pinned_tabs(index, exp.selector):
-                exec(code, module.__dict__)
-                if exp.entry == "main":
-                    entry = module.__dict__.get("main")
-                    if not callable(entry):
-                        raise ExperimentRenderError(
-                            f"{exp.id}: source has no callable main()"
-                        )
-                    entry()
+    # Serialised: the shims patch the process-global streamlit module, so two
+    # concurrent sessions must never have them installed at the same time.
+    with _RENDER_LOCK:
+        with _no_page_config():
+            if exp.mode == "pin_selectbox":
+                with _pinned_selectbox(exp.selector):
+                    exec(code, module.__dict__)
+            else:
+                with _pinned_tabs(index, exp.selector):
+                    exec(code, module.__dict__)
+                    if exp.entry == "main":
+                        entry = module.__dict__.get("main")
+                        if not callable(entry):
+                            raise ExperimentRenderError(
+                                f"{exp.id}: source has no callable main()"
+                            )
+                        entry()
