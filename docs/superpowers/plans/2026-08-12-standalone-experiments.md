@@ -423,15 +423,23 @@ def test_extracted_module_renders_its_baseline_text(new_id: str) -> None:
     )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="progress meter for the split; the marker comes off in Task 9",
+)
 def test_every_experiment_is_checked() -> None:
-    """Once the split is done, all 25 must be covered. Fails until then."""
+    """Once the split is done, all 25 must be covered."""
     assert len(EXTRACTED) == 25, f"only {len(EXTRACTED)}/25 extracted so far"
 ```
 
-- [ ] **Step 2: Run it — it must fail on the last test only**
+`strict=True` is the point: while the split is in progress this is a quiet
+`xfail` and the suite stays green, but the moment `EXTRACTED` reaches 25 the
+unexpected pass turns into a failure that forces the marker off in Task 9.
+
+- [ ] **Step 2: Run it — the suite must be green with one xfail**
 
 Run: `.venv/bin/python -m pytest tests/test_extraction_faithful.py -v`
-Expected: `test_every_experiment_is_checked` FAILS with "only 0/25 extracted so far". No other failures. That failure is the progress meter for Tasks 4–9.
+Expected: `1 xfailed` and no failures. That xfail is the progress meter for Tasks 4–9.
 
 - [ ] **Step 3: Commit**
 
@@ -924,10 +932,13 @@ The sixth tab ("📚 Theory & Concepts") has no function of its own; its body is
     "power_flow_theory": "w8.theory",
 ```
 
-- [ ] **Step 4: Run the full faithfulness check, including the gate**
+- [ ] **Step 4: Run the full faithfulness check, and retire the progress meter**
 
 Run: `.venv/bin/python -m pytest tests/test_extraction_faithful.py -v`
-Expected: 26 passed — 25 per-experiment checks plus `test_every_experiment_is_checked`, which now passes because `EXTRACTED` has 25 entries.
+Expected: 25 per-experiment checks pass, and `test_every_experiment_is_checked` FAILS as `XPASS(strict)` — `EXTRACTED` now has 25 entries, so the `xfail` marker is no longer true. That failure is the signal to remove the `@pytest.mark.xfail(...)` decorator from it.
+
+Remove the decorator, then re-run.
+Expected: 26 passed.
 
 - [ ] **Step 5: Commit**
 
