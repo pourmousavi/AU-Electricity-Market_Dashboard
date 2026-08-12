@@ -93,6 +93,16 @@ def dark_page_css() -> str:
   transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
   height: 100%;
 }}
+/* A card and its button are separate Streamlit elements, so the card only fills
+   the tallest card in its row if every wrapper between the column and the card
+   stretches. `div:has(.hub-card)` hits them all without depending on how deep
+   Streamlit nests element containers this version. */
+[data-testid="stColumn"]:has(.hub-card) > div {{ height: 100%; }}
+[data-testid="stColumn"]:has(.hub-card) div:has(.hub-card) {{
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+}}
+[data-testid="stColumn"]:has(.hub-card) .stButton {{ margin-top: .6rem; }}
+[data-testid="stColumn"]:has(.hub-card) {{ margin-bottom: 1.1rem; }}
 .hub-card h3, .hub-card span {{ color: {p['text']}; }}
 .hub-card:hover {{
   transform: translateY(-4px);

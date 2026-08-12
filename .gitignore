@@ -5,3 +5,4 @@ venv/
 .streamlit/secrets.toml
 .pytest_cache/
 .DS_Store
+admin access.txt
