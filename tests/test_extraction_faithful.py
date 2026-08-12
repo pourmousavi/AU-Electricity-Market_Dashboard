@@ -35,6 +35,12 @@ EXTRACTED: dict[str, str] = {
     "dispatch_detailed_analysis": "w7.detailed_analysis",
     "dispatch_individual_generators": "w7.individual_generators",
     "dispatch_pareto_frontier": "w7.pareto",
+    "auction_market_setup": "w8.market_setup",
+    "auction_network_topology": "w8.network_topology",
+    "auction_market_results": "w8.market_results",
+    "dc_opf_results": "w8.dc_opf_results",
+    "auction_vs_dc_opf": "w8.market_vs_opf",
+    "power_flow_theory": "w8.theory",
 }
 
 
@@ -159,10 +165,6 @@ def test_extracted_module_renders_its_baseline_text(new_id: str) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="progress meter for the split; the marker comes off in Task 9",
-)
 def test_every_experiment_is_checked() -> None:
     """Once the split is done, all 25 must be covered."""
     assert len(EXTRACTED) == 25, f"only {len(EXTRACTED)}/25 extracted so far"
