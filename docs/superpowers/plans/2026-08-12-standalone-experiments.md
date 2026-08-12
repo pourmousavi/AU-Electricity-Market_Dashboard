@@ -145,6 +145,20 @@ git commit -m "test: record pre-split rendering baseline for all 25 experiments"
   - `build_module(source: str, body: list[ast.stmt], roots: list[ast.stmt], docstring: str) -> str` — the text of a new module: docstring, all imports from the source, the closure, then `def render() -> None:` wrapping `body`.
 - Tasks 3–8 call these.
 
+**Emit original source text, never `ast.unparse`.** `ast.unparse` regenerates
+code from the tree, which silently discards every comment and all original
+formatting — on teaching material the comments are half the value. Every
+statement this tool emits is instead sliced out of the original file's text:
+
+- A helper, class or constant is emitted as its exact source lines, including
+  any contiguous `#` comment block immediately above it.
+- A `render()` body is the exact source text spanning the first to the last
+  statement of the block, `textwrap.dedent`-ed and re-indented by four spaces.
+  Interior comments and blank lines survive untouched.
+
+`ast` is still what *decides* which statements to emit and where they start and
+end; it is never what writes them out.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
