@@ -30,6 +30,10 @@ def _esc(value: str | None) -> str:
     return html.escape(value or "")
 
 
+def _rows(items: list, per_row: int) -> list[list]:
+    return [items[i:i + per_row] for i in range(0, len(items), per_row)]
+
+
 def render_home(engine) -> None:
     theme.inject(theme.dark_page_css())
     topics = db.list_topics(engine, include_disabled=True)
@@ -60,20 +64,25 @@ def render_home(engine) -> None:
         unsafe_allow_html=True,
     )
 
-    columns = st.columns(3, gap="medium")
-    for index, (topic, is_open, chip) in enumerate(cards):
-        with columns[index % 3]:
-            st.markdown(
-                f"""<div class="hub-card {'' if is_open else 'locked'}">
+    # One st.columns() call per row, not one for the whole grid: columns only
+    # stretch to the height of the tallest card in *their own* row, so a single
+    # grid-wide call would stack cards down each column with nothing to align to.
+    for row in _rows(cards, 3):
+        for column, (topic, is_open, chip) in zip(st.columns(3, gap="medium"), row):
+            with column:
+                st.markdown(
+                    f"""<div class="hub-card {'' if is_open else 'locked'}">
   <span class="hub-chip {'open' if is_open else ''}">{_esc(chip)}</span>
   <h3>{_esc(topic['name'])}</h3>
   <p>{_esc(topic['subtitle'])}</p>
 </div>""",
-                unsafe_allow_html=True,
-            )
-            label = "Open" if is_open else "Preview"
-            if st.button(label, key=f"_hub.card_{topic['id']}", width="stretch"):
-                go(Route("topic", topic["id"], None))
+                    unsafe_allow_html=True,
+                )
+                label = "Open" if is_open else "Preview"
+                if st.button(
+                    label, key=f"_hub.card_{topic['id']}", width="stretch"
+                ):
+                    go(Route("topic", topic["id"], None))
 
     st.caption(
         "This site records anonymous usage statistics (which experiments are opened "
@@ -110,21 +119,21 @@ def render_topic(engine, topic_id: int) -> None:
         return
 
     available = [e for e in experiments if e["enabled"] and not e["orphaned"]]
-    columns = st.columns(2, gap="medium")
-    for index, exp in enumerate(available):
-        with columns[index % 2]:
-            st.markdown(
-                f"""<div class="hub-card">
+    for row in _rows(available, 2):
+        for column, exp in zip(st.columns(2, gap="medium"), row):
+            with column:
+                st.markdown(
+                    f"""<div class="hub-card">
   <h3>{_esc(exp['title'])}</h3>
   <p>{_esc(exp['blurb'])}</p>
 </div>""",
-                unsafe_allow_html=True,
-            )
-            if st.button(
-                "Open experiment", key=f"_hub.exp_{exp['experiment_id']}",
-                width="stretch",
-            ):
-                go(Route("experiment", None, exp["experiment_id"]))
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    "Open experiment", key=f"_hub.exp_{exp['experiment_id']}",
+                    width="stretch",
+                ):
+                    go(Route("experiment", None, exp["experiment_id"]))
 
     st.divider()
     if st.button("← All topics", key="_hub.topic_back"):
