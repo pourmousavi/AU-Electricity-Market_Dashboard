@@ -15,7 +15,13 @@ ROOT = Path(__file__).resolve().parent.parent
 BASELINE = json.loads((ROOT / "tests" / "baseline_render.json").read_text())
 
 # new id -> old id. One line added per extracted experiment.
-EXTRACTED: dict[str, str] = {}
+EXTRACTED: dict[str, str] = {
+    "consumer_model": "w2.consumer_model",
+    "consumer_elasticity": "w2.consumer_elasticity",
+    "supplier_model": "w2.supplier_model",
+    "supplier_elasticity": "w2.supplier_elasticity",
+    "market_equilibrium": "w2.market_equilibrium",
+}
 
 
 def _build_allowances() -> dict[str, Counter]:
