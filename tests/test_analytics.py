@@ -83,6 +83,99 @@ def test_identity_label_is_unique_devices_outside_streamlit_runtime(monkeypatch)
     assert analytics.identity_label() == "Unique devices"
 
 
+_TEST_SALT = "test-fixture-salt-not-a-real-secret"
+
+
+def _visitor_row(engine, session_id: str) -> dict:
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(db.visitor_session).where(db.visitor_session.c.id == session_id)
+        ).first()
+    assert row is not None
+    return dict(row._mapping)
+
+
+def _patch_streamlit_for_session(monkeypatch, *, headers: dict[str, str], query_params: dict) -> None:
+    """Install fakes for every `st.*` surface `ensure_session` touches.
+
+    `state` is passed straight into `ensure_session` (a plain dict), so this
+    only needs to stand in for `st.context`, `st.query_params` and
+    `st.secrets` -- no live Streamlit runtime required.
+    """
+    monkeypatch.setattr(analytics.st, "context", _FakeContext(headers))
+    monkeypatch.setattr(analytics.st, "query_params", query_params)
+    monkeypatch.setattr(analytics.st, "secrets", {"analytics": {"ip_salt": _TEST_SALT}})
+
+
+def test_ensure_session_never_persists_the_raw_ip(monkeypatch, engine) -> None:
+    """The regression net for the whole privacy claim.
+
+    Would fail if `ensure_session` ever stored `ip` instead of `hash_ip(ip,
+    salt)` -- for either the session id or the ip_hash column.
+    """
+    raw_ip = "203.0.113.9"
+    _patch_streamlit_for_session(
+        monkeypatch, headers={"X-Forwarded-For": raw_ip}, query_params={}
+    )
+    state: dict = {}
+
+    session_id = analytics.ensure_session(engine, state=state)
+
+    row = _visitor_row(engine, session_id)
+    assert row["ip_hash"] == analytics.hash_ip(raw_ip, _TEST_SALT)
+    for column, value in row.items():
+        assert raw_ip not in str(value), f"raw IP leaked into column {column!r}"
+    assert raw_ip not in session_id
+
+
+def test_ensure_session_is_idempotent_per_state(monkeypatch, engine) -> None:
+    _patch_streamlit_for_session(
+        monkeypatch, headers={"X-Forwarded-For": "203.0.113.9"}, query_params={}
+    )
+    state: dict = {}
+
+    first = analytics.ensure_session(engine, state=state)
+    second = analytics.ensure_session(engine, state=state)
+
+    assert first == second
+    with engine.connect() as conn:
+        count = conn.execute(
+            select(func.count()).select_from(db.visitor_session)
+        ).scalar_one()
+    assert count == 1
+
+
+def test_ensure_session_falls_back_to_device_id_without_forwarding_header(
+    monkeypatch, engine
+) -> None:
+    query_params: dict = {}
+    _patch_streamlit_for_session(monkeypatch, headers={}, query_params=query_params)
+    state: dict = {}
+
+    session_id = analytics.ensure_session(engine, state=state)
+
+    assert analytics.DEVICE_PARAM in query_params
+    device = query_params[analytics.DEVICE_PARAM]
+    row = _visitor_row(engine, session_id)
+    assert row["ip_hash"] == analytics.hash_ip(device, _TEST_SALT)
+    # No IP was ever extracted, so nothing IP-derived can have been stored --
+    # the hash traces back to the anonymous device id, not an address.
+    for column, value in row.items():
+        assert "203.0.113" not in str(value)
+
+
+def test_ensure_session_reuses_existing_device_id(monkeypatch, engine) -> None:
+    query_params = {analytics.DEVICE_PARAM: "already-minted-device-id"}
+    _patch_streamlit_for_session(monkeypatch, headers={}, query_params=query_params)
+    state: dict = {}
+
+    session_id = analytics.ensure_session(engine, state=state)
+
+    assert query_params[analytics.DEVICE_PARAM] == "already-minted-device-id"
+    row = _visitor_row(engine, session_id)
+    assert row["ip_hash"] == analytics.hash_ip("already-minted-device-id", _TEST_SALT)
+
+
 def test_track_buffers_without_writing(engine) -> None:
     state: dict = {}
     analytics.track(engine, "home_view", state=state, flush_at=5)
