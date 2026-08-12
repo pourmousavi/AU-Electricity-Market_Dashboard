@@ -21,6 +21,10 @@ EXTRACTED: dict[str, str] = {
     "supplier_model": "w2.supplier_model",
     "supplier_elasticity": "w2.supplier_elasticity",
     "market_equilibrium": "w2.market_equilibrium",
+    "pool_pricing": "w3.pool_pricing",
+    "market_power": "w3.market_power",
+    "profit_cost_recovery": "w3.profit_cost_recovery",
+    "interactive_clearing": "w3.interactive_clearing",
 }
 
 
