@@ -162,6 +162,18 @@ Two tests carry most of the weight:
   as part of the six bundled dashboards, captured before the split. It pins
   every experiment's rendered text against that record, so a change that
   quietly alters what students see fails here even if nothing crashes.
+
+  Which means a *deliberate* wording change fails it too. That is intended —
+  it asks you to confirm. Re-record rather than editing the JSON by hand:
+
+  ```bash
+  .venv/bin/python scripts/refresh_baseline.py --check   # what would change
+  .venv/bin/python scripts/refresh_baseline.py           # accept it
+  ```
+
+  Read the resulting diff before committing: every line it changes is a line
+  a student would have seen change. Note that refreshing replaces the
+  pre-split record with current behaviour — the original stays in git history.
 * `tests/test_experiments_render.py` — imports and renders all 25 experiments
   and additionally asserts that none leaks a former sibling's content (the
   failure mode a shared `_kit` page or a copy-paste extraction mistake would
@@ -184,7 +196,7 @@ hub/
   admin_auth.py         the coordinator password gate
   analytics.py          anonymous capture (salted IP hash, never the raw IP)
   queries.py            read-side analytics for the admin panel
-  state.py              stops experiments in the same STATE_GROUP (or lack of one) from corrupting each other's state
+  state.py              drops experiment state when the STATE_GROUP changes; same-group experiments keep theirs
   theme.py              hub CSS, scoped to .hub- classes only
 docs/deployment-notes.md  Neon, secrets, Community Cloud
 ```

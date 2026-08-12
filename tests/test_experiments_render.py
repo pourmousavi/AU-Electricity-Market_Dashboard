@@ -156,3 +156,43 @@ def test_only_the_selected_experiment_renders(exp_id: str) -> None:
             f"rendered output — {sibling_marker!r}. The extraction likely "
             "wired up the wrong body."
         )
+
+
+# The membership of each group, pinned by value. The assertion above only
+# checks WHICH experiments declare a STATE_GROUP, so a typo in the VALUE
+# ("dispatchh") would leave TAB_IDS intact, silently split that group, and
+# make the sibling-leak loop above vacuous for that module. The student-visible
+# symptom is exactly what STATE_GROUP exists to prevent: a generator setup
+# cleared when moving between two dispatch experiments.
+EXPECTED_GROUPS: dict[str, set[str]] = {
+    "duality": {"strong_duality", "weak_duality", "duality_theorems"},
+    "dispatch": {
+        "dispatch_generator_setup", "dispatch_comparison",
+        "dispatch_detailed_analysis", "dispatch_individual_generators",
+        "dispatch_pareto_frontier",
+    },
+    "dc_network": {
+        "auction_market_setup", "auction_network_topology",
+        "auction_market_results", "dc_opf_results", "auction_vs_dc_opf",
+        "power_flow_theory",
+    },
+}
+
+
+def test_state_groups_have_the_expected_members() -> None:
+    """A mistyped STATE_GROUP value silently isolates an experiment."""
+    actual = {group: set(ids) for group, ids in _SIBLINGS_BY_GROUP.items()}
+    assert actual == EXPECTED_GROUPS
+
+
+def test_ungrouped_experiments_declare_no_state_group() -> None:
+    """The other 11 are their own group — they must not join one by accident."""
+    grouped = {exp_id for ids in EXPECTED_GROUPS.values() for exp_id in ids}
+    ungrouped = sorted(set(CATALOGUE) - grouped)
+    assert len(ungrouped) == 11, ungrouped
+    for exp_id in ungrouped:
+        module = importlib.import_module(f"experiments.{exp_id}")
+        assert not hasattr(module, "STATE_GROUP"), (
+            f"{exp_id} declares STATE_GROUP={module.STATE_GROUP!r}; it would "
+            "then share session state with that group's experiments"
+        )

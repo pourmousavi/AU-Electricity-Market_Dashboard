@@ -12,8 +12,7 @@ See `README.md` for what the project is and how to work on it locally.
 The database holds two things: the **presentation layer** (topics, which
 experiment sits where, what is switched on) and the **anonymous analytics**.
 It is not a cache — losing it loses the coordinator's arrangement of the
-course, though not the experiments themselves, which live in `catalogue.yaml`
-and `sources/`.
+course, though not the experiments themselves, which live in `experiments/`.
 
 1. Create a project at <https://neon.tech> (the free tier is ample: this is
    tens of thousands of small rows per semester).
@@ -29,9 +28,15 @@ and `sources/`.
    without it SQLAlchemy reaches for psycopg2, which is not installed.
    `sslmode=require` is not optional; Neon rejects plaintext.
 4. Nothing else to do. `db.bootstrap()` creates the tables on first boot,
-   `db.seed_initial()` populates the six week topics with every experiment
-   enabled, and `db.reconcile()` syncs the catalogue on every boot after that.
-   All three are idempotent.
+   `db.seed_initial()` inserts all 25 experiments **disabled**, in a single
+   disabled topic called "Unsorted", and `db.reconcile()` syncs the catalogue
+   on every boot after that. All three are idempotent.
+
+   Note what this means for a genuinely fresh database: the site comes up
+   with nothing visible to students. The topics and their ordering are the
+   coordinator's arrangement, not something the code can regenerate, so after
+   a fresh-database deploy the layout has to be rebuilt by hand in the admin
+   panel — which is exactly why the backup below matters.
 
 Neon's free tier suspends an idle compute. The first request after a
 suspension takes a few seconds to wake it; `create_engine(..., pool_pre_ping=True)`
@@ -113,13 +118,14 @@ password comparison. Until that exists, the password is the control.
 ## 4. Streamlit Community Cloud
 
 1. Push to GitHub. The repository may be public — it contains no secrets, and
-   `sources/` is vendored from repositories that are already published.
+   the course material under `experiments/` is what students are shown anyway.
 2. At <https://share.streamlit.io>, **New app**, point it at the repository,
    branch `main`, main file `app.py`.
 3. **Advanced settings → Python version: 3.12.**
 4. Paste the three secrets from section 2 into the Secrets box. They are
    available as `st.secrets` immediately; editing them restarts the app.
-5. Deploy. First boot creates the tables and seeds the six topics.
+5. Deploy. First boot creates the tables and inserts every experiment
+   disabled and unsorted — see the note in section 1.
 
 ### Things that will bite you
 
@@ -134,9 +140,10 @@ reason.** `streamlit>=1.55,<1.62`:
   `tests/test_admin.py::test_installed_streamlit_supports_the_admin_panels_api`
   fails loudly if an environment drops below it;
 * from 1.62, `use_container_width` is expected to be gone. The hub itself has
-  migrated to `width="stretch"`, but the six vendored dashboards still use
-  `use_container_width` and **must not be edited**. Lifting the ceiling means
-  re-vendoring from upstream first, then running
+  migrated to `width="stretch"`, but most modules under `experiments/` still
+  call `use_container_width`. There is no upstream to re-vendor from any more
+  — the hub owns this code — so lifting the ceiling means migrating those
+  calls in `experiments/` directly, then running
   `pytest tests/test_experiments_render.py`.
 
 Do not replace the range with an unpinned `streamlit`. A Community Cloud
@@ -152,8 +159,8 @@ event; this setting is the backstop for anything raised outside that block.
 Leave it off. To debug a real failure, read the Community Cloud logs — the
 traceback is there in full.
 
-**Resource limits.** The free tier gives roughly 1 GB of RAM. The week 7 and
-week 8 experiments run PyPSA and cvxpy solves that can take several seconds
+**Resource limits.** The free tier gives roughly 1 GB of RAM. The `dispatch_*`
+and DC-network experiments run cvxpy and networkx solves that can take seconds
 and hold real memory. A full tutorial cohort hitting solver-backed experiments
 at once is the load case to watch; if the app starts restarting under load,
 that is where to look first.

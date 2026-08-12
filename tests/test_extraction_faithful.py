@@ -1,8 +1,22 @@
-"""Each extracted module must render what its bundled original rendered.
+"""Every experiment must render the text its bundled original rendered.
 
-Tasks add a line to EXTRACTED as they extract. An experiment that is not in
-this map yet is simply not checked -- the map grows to 25 by the end of the
-split, and test_every_experiment_is_checked then locks it.
+`tests/baseline_render.json` is the record of what the six bundled dashboards
+put on the page, captured before they were split into `experiments/`. This
+file pins each experiment against that record in BOTH directions: nothing may
+go missing (beyond the counted sidebar-branding allowance below, which the
+split deliberately dropped for weeks 2-4), and nothing unexpected may appear.
+
+That made it the proof the split was faithful. It now also makes it a snapshot
+test: deliberately rewording an `st.markdown` in an experiment WILL fail here,
+which is the point -- it is a change students see. To accept such a change,
+re-record the baseline rather than editing the JSON by hand:
+
+    .venv/bin/python scripts/refresh_baseline.py --check   # what would change
+    .venv/bin/python scripts/refresh_baseline.py           # accept it
+
+EXTRACTED maps each experiment's current id to the key it is recorded under.
+Those keys are the pre-split ids (`w2.market_equilibrium`), kept because they
+are what the record was captured against.
 """
 import json
 from collections import Counter
