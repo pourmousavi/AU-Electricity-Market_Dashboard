@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 # Running this file directly (not via `python -m` or pytest's pythonpath=.)
 # puts scripts/ rather than the repo root on sys.path, so the repo-root
-# imports below need the root added first -- same as scripts/capture_baseline.py.
+# imports below need the root added first.
 sys.path.insert(0, str(ROOT))
 
 from sqlalchemy import select, update  # noqa: E402

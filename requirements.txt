@@ -9,10 +9,9 @@
 #            student site still looks perfectly fine.
 #            (tests/test_admin.py asserts the installed version can do this.)
 #   <1.62  : use_container_width is deprecated as of 1.61 and slated for
-#            removal; the hub itself now uses width="stretch", but the six
-#            vendored dashboards under sources/ still use use_container_width
-#            and must never be edited. Lift this ceiling only together with a
-#            re-vendor.
+#            removal; the hub itself now uses width="stretch", but most
+#            experiments/ modules still call use_container_width. Lift this
+#            ceiling only together with a pass to migrate every experiment.
 streamlit>=1.55,<1.62
 pandas>=2.0.0
 numpy>=1.24.0

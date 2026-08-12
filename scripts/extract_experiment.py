@@ -108,8 +108,8 @@ def session_state_guards(tree: ast.Module) -> list[ast.stmt]:
     top of render(). They are idempotent, so all of them are carried.
 
     Limitation: this only matches bare module-level `if` guards. It returns
-    `[]` for sources/week7_ed_viu.py and sources/week8_pf_auction.py, which
-    centralise their session-state setup inside a function
+    `[]` for week7_ed_viu.py and week8_pf_auction.py (the original bundled
+    dashboards), which centralise their session-state setup inside a function
     (`initialize_session_state()`) instead of writing the guards directly at
     module level. That's fine for how this plan uses the function -- weeks 7
     and 8 build their render() preamble by hand in their own extraction

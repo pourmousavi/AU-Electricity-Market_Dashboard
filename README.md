@@ -12,54 +12,55 @@ coordinator, and anonymous usage analytics in Neon Postgres.
 
 ---
 
-## The one rule: `sources/` is vendored verbatim
+## An experiment is a module
 
-The six weekly dashboards under `sources/` are **byte-for-byte copies of their
-upstream repositories**. They are never edited, reformatted, or "tidied" — not
-for a lint error, not for a deprecation warning, not to make an experiment
-easier to isolate. Everything the hub needs is achieved from the outside.
+Each of the 25 experiments is a Python module in `experiments/` exposing a
+single `render()` function that draws it. There is nothing to isolate at
+runtime: no monkeypatching of the shared `streamlit` module, no process-wide
+lock, no AST surgery. `hub/runner.py` just imports the module and calls
+`render()`.
 
-Two things enforce this:
+The reason this shape is worth keeping intact: code used by exactly one
+experiment lives in that experiment's own file — roughly 95% of the
+codebase — so the ordinary edit ("fix an axis label in week 7's generator
+setup") touches one file and structurally cannot reach any other experiment.
 
-* `tests/test_sources_intact.py` re-downloads each upstream file and fails if
-  the vendored copy differs.
-* `scripts/sync_sources.py` is the **only** sanctioned way to change anything
-  under `sources/`:
+A few page bodies are shared by construction, because the original bundled
+dashboards drew several tabs from one continuous script. `experiments/_kit/`
+holds exactly the three that have 2+ real consumers:
 
-  ```bash
-  .venv/bin/python scripts/sync_sources.py --dry-run   # what would change
-  .venv/bin/python scripts/sync_sources.py             # pull upstream
-  .venv/bin/python -m pytest tests/test_experiments_render.py
-  ```
+| `_kit` module | shared by |
+|---|---|
+| `duality.py` | 3 experiments |
+| `dispatch.py` | 5 experiments |
+| `dc_network.py` | 6 experiments |
 
-  Re-running the render test after a sync is not optional: an upstream edit
-  that renames a tab label or a sidebar option silently breaks the experiment
-  that pins it, and the catalogue is the only place that knows.
+Each exposes `page(tab_body=None)`. The calling experiment passes its own tab
+body in, and `page()` invokes it at exactly the point the original `st.tabs`
+block would have rendered that tab, so render order still matches the
+bundled original.
 
-Why this matters: the dashboards keep being developed upstream. The moment we
-patch a vendored file by hand, the next sync either clobbers the patch or
-conflicts with it, and the site's behaviour stops being traceable to anything.
+Modules that share a `_kit` page also declare `STATE_GROUP` — `"duality"`,
+`"dispatch"`, or `"dc_network"` — which is how `hub/runner.py` knows those
+modules deliberately share Streamlit session state (see `hub/state.py`). A
+module with no `STATE_GROUP` is its own state group, keyed by its own id, and
+cannot collide with anything else.
 
-### How isolation works instead
+One rule with no exceptions: **no module may call `st.set_page_config`.**
+`app.py` is the only place that does — Streamlit raises if it is called
+twice in one script run, so a second call anywhere else takes down the page.
 
-`hub/runner.py` executes a vendored file unmodified and makes exactly one
-experiment's branch run, in one of two modes declared per experiment in
-`catalogue.yaml`:
+### The id is the database key
 
-* **`pin_selectbox`** (weeks 2, 3, 4) — the module calls
-  `st.sidebar.selectbox` once at module level and dispatches on the result.
-  The runner makes that one call return the experiment we want.
-* **`pin_tab`** (weeks 6, 7, 8) — content is built inline inside `with tabN:`
-  blocks, so calling a render function is not enough. `hub/tabsurgery.py`
-  blanks the unselected tab bodies in the AST and the runner patches
-  `st.tabs` to draw a single tab.
-
-Both modes patch the process-global `streamlit` module, so
-`render_experiment` holds a module-level lock for the whole patched block and
-each shim additionally checks it is being called by the thread that installed
-it. Streamlit runs one thread per session with no global script lock, and the
-patched window spans an entire PyPSA or cvxpy solve — concurrent students are
-the normal case, not a rare race. Do not remove either defence.
+An experiment's id is its filename stem (`dispatch_pareto_frontier.py` →
+`dispatch_pareto_frontier`), and that id doubles as the primary key of the
+`experiment` table in Postgres — it's baked into the shareable URL
+(`?view=experiment&exp=…`) and into every analytics row. Renaming a file
+therefore means renaming a live database key, which `hub/db.py::reconcile`
+cannot do by itself: on its own it only knows how to insert a newly-seen id
+or flag a disappeared one as orphaned, never that "id A became id B". Do that
+with a one-off migration instead; `scripts/migrate_experiment_ids.py` is the
+worked example, from the migration this project's own split required.
 
 ---
 
@@ -68,18 +69,19 @@ the normal case, not a rare race. Do not remove either defence.
 Keep these straight; almost every "where do I change X" question resolves to
 one of them.
 
-| | `catalogue.yaml` (in the repo) | Database (edited live) |
+| | `experiments/` (in the repo) | Database (edited live) |
 |---|---|---|
-| Answers | **How** to render an experiment | **How** to present it |
-| Holds | source file, mode, selector, entry point | topic, title, blurb, order, enabled |
+| Answers | **which** experiments exist | **how** to present each one |
+| Holds | one module per experiment, each exposing `render()` | topic, title, blurb, order, enabled |
 | Changed by | a commit and a redeploy | the admin panel, instantly |
 | Owner | whoever maintains the code | the course coordinator |
 
-An experiment that is in `catalogue.yaml` but has no database row is created
-on next boot — **unassigned and disabled**, so nothing reaches students until
-it is deliberately placed. An experiment whose id disappears from
-`catalogue.yaml` is flagged `orphaned`, never deleted, so its settings survive
-a rename or a temporary removal. That reconciliation is `hub/db.py::reconcile`.
+An experiment that is a module in `experiments/` but has no database row is
+created on next boot — **unassigned and disabled**, so nothing reaches
+students until it is deliberately placed. An experiment whose module
+disappears from `experiments/` is flagged `orphaned`, never deleted, so its
+settings survive a rename or a temporary removal. That reconciliation is
+`hub/db.py::reconcile`.
 
 ---
 
@@ -106,32 +108,26 @@ IP is ever stored or logged — only a salted one-way hash. See `hub/analytics.p
 
 ---
 
-## Adding a new dashboard
+## Adding a new experiment
 
-1. Drop the `.py` file into `sources/` **unmodified**, and add it to
-   `SOURCES` in `scripts/sync_sources.py` so it stays in sync with upstream.
-2. Add the file under `sources:` in `catalogue.yaml`, then one entry per
-   experiment under `experiments:`:
-
-   ```yaml
-   - {id: w9.my_experiment, source: week9, mode: pin_tab, entry: main, selector: "📊 My Tab"}
-   ```
-
-   * `id` — stable and unique; it is the shareable URL (`?view=experiment&exp=…`)
-     and the analytics key, so renaming one orphans its history.
-   * `mode` — `pin_selectbox` or `pin_tab`, matching how the file is built.
-   * `selector` — the sidebar option label or the tab label, **exactly** as it
-     appears in the source, emoji included.
-   * `entry` — `module` if the content runs at import, `main` if the file
-     defines `main()` and calls it under a `__main__` guard.
-3. Run the render smoke test, which executes every catalogued experiment:
+1. Drop a `.py` file exposing `render()` into `experiments/`. That's the
+   whole mechanical step — there is no registry or catalogue file to edit;
+   `hub/catalogue.py` globs `experiments/*.py` at startup and the filename
+   stem becomes the id. Pick that filename carefully: it's the id for the
+   rest of this experiment's life (see "The id is the database key" above).
+   Remember the one hard rule — it must not call `st.set_page_config`.
+2. If the experiment is meant to share session state with others (typically
+   because it draws through a shared `experiments/_kit/` page), declare a
+   matching `STATE_GROUP` on the module. Otherwise leave `STATE_GROUP` unset
+   and it gets its own isolated state, keyed by its own id.
+3. Run the render smoke test, which executes every module in `experiments/`:
 
    ```bash
    .venv/bin/python -m pytest tests/test_experiments_render.py
    ```
-4. Commit and push. The new experiments arrive **unassigned and disabled** —
-   go to `?admin=1` → Content, put them in a topic, and switch them on when
-   the week arrives.
+4. Commit and push. The new experiment arrives **unassigned and disabled** —
+   go to `?admin=1` → Content, put it in a topic, and switch it on when the
+   week arrives.
 
 ---
 
@@ -159,18 +155,27 @@ Tests:
 .venv/bin/python -m pytest -q
 ```
 
-`tests/test_sources_intact.py` needs the `gh` CLI authenticated, since it
-checks the vendored copies against upstream.
+Two tests carry most of the weight:
+
+* `tests/test_extraction_faithful.py`, checked against
+  `tests/baseline_render.json` — the recorded text every experiment rendered
+  as part of the six bundled dashboards, captured before the split. It pins
+  every experiment's rendered text against that record, so a change that
+  quietly alters what students see fails here even if nothing crashes.
+* `tests/test_experiments_render.py` — imports and renders all 25 experiments
+  and additionally asserts that none leaks a former sibling's content (the
+  failure mode a shared `_kit` page or a copy-paste extraction mistake would
+  produce).
 
 ### Layout
 
 ```
 app.py                  entry point; the only place st.set_page_config is called
-catalogue.yaml          how to render each experiment
+experiments/            one module per experiment, each exposing render()
+  _kit/                 page bodies shared by 2+ experiments (duality, dispatch, dc_network)
 hub/
-  runner.py             executes a vendored file, isolating one experiment
-  tabsurgery.py         AST surgery for pin_tab sources
-  catalogue.py          loads and validates catalogue.yaml
+  runner.py             imports one experiment module and calls its render()
+  catalogue.py          globs experiments/*.py; filename stem is the experiment id
   db.py                 topics, experiment placement, analytics tables
   router.py             ?view= query-string routing and the sidebar nav
   pages_student.py      home grid, topic page, locked teaser
@@ -179,7 +184,7 @@ hub/
   admin_auth.py         the coordinator password gate
   analytics.py          anonymous capture (salted IP hash, never the raw IP)
   queries.py            read-side analytics for the admin panel
-  state.py              stops the six dashboards corrupting each other's state
+  state.py              stops experiments in the same STATE_GROUP (or lack of one) from corrupting each other's state
   theme.py              hub CSS, scoped to .hub- classes only
 docs/deployment-notes.md  Neon, secrets, Community Cloud
 ```
@@ -187,7 +192,7 @@ docs/deployment-notes.md  Neon, secrets, Community Cloud
 Two conventions the tests rely on:
 
 * every hub-owned session-state key and widget key is prefixed `_hub.` — that
-  prefix is what tells `hub/state.py` which keys belong to a vendored module
-  and may be cleared;
-* the hub's dark CSS is scoped to `.hub-` classes, so it cannot leak into a
-  vendored dashboard's own styling.
+  prefix is what tells `hub/state.py` which keys belong to an experiment
+  module and may be cleared;
+* the hub's dark CSS is scoped to `.hub-` classes, so it cannot leak into an
+  experiment module's own styling.

@@ -64,8 +64,8 @@ def test_experiment_produces_output(exp_id: str) -> None:
 # the experiment's OWN marker is present.
 #
 # The markers below are short excerpts carried over verbatim from the
-# bundled originals (sources/week6_duality.py, sources/week7_ed_viu.py and
-# sources/week8_pf_auction.py), where each occurred only within that one
+# bundled originals (week6_duality.py, week7_ed_viu.py and
+# week8_pf_auction.py), where each occurred only within that one
 # tab's body. A failure here means either the extraction wired up the wrong
 # body, or a _kit page started rendering content it should not — in either
 # case this test failing is doing its job.
