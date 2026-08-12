@@ -30,6 +30,11 @@ EXTRACTED: dict[str, str] = {
     "strong_duality": "w6.strong_duality",
     "weak_duality": "w6.weak_duality",
     "duality_theorems": "w6.duality_theorems",
+    "dispatch_generator_setup": "w7.generator_setup",
+    "dispatch_comparison": "w7.comparison_results",
+    "dispatch_detailed_analysis": "w7.detailed_analysis",
+    "dispatch_individual_generators": "w7.individual_generators",
+    "dispatch_pareto_frontier": "w7.pareto",
 }
 
 
