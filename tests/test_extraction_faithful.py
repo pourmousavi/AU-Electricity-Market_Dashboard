@@ -5,6 +5,7 @@ this map yet is simply not checked -- the map grows to 25 by the end of the
 split, and test_every_experiment_is_checked then locks it.
 """
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -16,21 +17,69 @@ BASELINE = json.loads((ROOT / "tests" / "baseline_render.json").read_text())
 # new id -> old id. One line added per extracted experiment.
 EXTRACTED: dict[str, str] = {}
 
-# Text the extraction deliberately drops: the vendored sidebar branding of
-# weeks 2, 3 and 4. Any other missing text is a defect.
-ALLOWED_REMOVALS = {
-    "⚡ Electricity Market Dashboard",
-    "📈 3D Optimization Dashboard",
-    "---",
-    "### Course Information",
-    "**Electricity Market and Power Systems Operation**",
-    "**ELEC ENG 4087/7087**",
-    "**Course Coordinator & Creator:**",
-    "Ali Pourmousavi Kani",
-    "**Version:** 2.0",
-    "**Version:** 1.0 - Market Power & Economics",
-    "**Version:** 2.0 - 3D Nonlinear Optimization",
-}
+
+def _build_allowances() -> dict[str, Counter]:
+    """Build per-experiment removal allowances based on OLD id.
+
+    Week 2, 3, 4 have module-level sidebar branding that extraction removes.
+    Week 6, 7, 8 have no sidebar branding removals - all content stays.
+    """
+    allowances: dict[str, Counter] = {}
+
+    # Week 2: sidebar branding from sources/week2_consumer_supplier.py:32-50
+    w2_allowance = Counter({
+        "⚡ Electricity Market Dashboard": 1,
+        "---": 4,  # 4 separate st.sidebar.markdown("---") calls
+        "### Course Information": 1,
+        "**Electricity Market and Power Systems Operation**": 1,
+        "**ELEC ENG 4087/7087**": 1,
+        "**Course Coordinator & Creator:**": 1,
+        "Ali Pourmousavi Kani": 1,
+        "**Version:** 2.0": 1,
+    })
+
+    # Week 3: sidebar branding from sources/week3_pricing_market_power.py:128-146
+    w3_allowance = Counter({
+        "⚡ Electricity Market Dashboard": 1,
+        "---": 4,
+        "### Course Information": 1,
+        "**Electricity Market and Power Systems Operation**": 1,
+        "**ELEC ENG 4087/7087**": 1,
+        "**Course Coordinator & Creator:**": 1,
+        "Ali Pourmousavi Kani": 1,
+        "**Version:** 1.0 - Market Power & Economics": 1,
+    })
+
+    # Week 4: sidebar branding from sources/week4_optimisation_tools.py:16-36
+    w4_allowance = Counter({
+        "📈 3D Optimization Dashboard": 1,
+        "---": 4,
+        "### Course Information": 1,
+        "**Electricity Market and Power Systems Operation**": 1,
+        "**ELEC ENG 4087/7087**": 1,
+        "**Course Coordinator & Creator:**": 1,
+        "Ali Pourmousavi Kani": 1,
+        "**Version:** 2.0 - 3D Nonlinear Optimization": 1,
+    })
+
+    # Week 6, 7, 8: no sidebar branding removals
+    empty_allowance = Counter()
+
+    # Assign allowances to experiments based on OLD id prefix
+    for old_id in BASELINE.keys():
+        if old_id.startswith("w2."):
+            allowances[old_id] = w2_allowance.copy()
+        elif old_id.startswith("w3."):
+            allowances[old_id] = w3_allowance.copy()
+        elif old_id.startswith("w4."):
+            allowances[old_id] = w4_allowance.copy()
+        else:  # w6, w7, w8
+            allowances[old_id] = empty_allowance.copy()
+
+    return allowances
+
+
+ALLOWANCES = _build_allowances()
 
 
 def _harness(new_id: str) -> str:
@@ -54,19 +103,39 @@ def _render(new_id: str):
 @pytest.mark.parametrize("new_id", sorted(EXTRACTED))
 def test_extracted_module_renders_its_baseline_text(new_id: str) -> None:
     app = _render(new_id)
-    rendered = set()
+    rendered_list = []
     for kind in ("title", "header", "subheader", "markdown", "info", "warning",
                  "error", "success", "caption", "code", "text"):
         for element in getattr(app, kind, []):
             value = getattr(element, "value", None)
             if isinstance(value, str):
-                rendered.add(value)
+                rendered_list.append(value)
 
-    expected = set(BASELINE[EXTRACTED[new_id]]["text"])
-    missing = {t for t in expected - rendered if t.strip() not in ALLOWED_REMOVALS}
-    assert not missing, (
-        f"{new_id} no longer renders {len(missing)} baseline strings, e.g. "
-        + repr(sorted(missing)[:3])
+    old_id = EXTRACTED[new_id]
+    expected_counter = Counter(BASELINE[old_id]["text"])
+    rendered_counter = Counter(rendered_list)
+    allowance = ALLOWANCES[old_id]
+
+    # Check for missing text: anything in baseline not in rendered (beyond allowance)
+    missing_counter = expected_counter - rendered_counter
+    if missing_counter:
+        # Filter out allowed removals
+        actual_missing = Counter()
+        for text, count in missing_counter.items():
+            allowed_count = allowance.get(text, 0)
+            if count > allowed_count:
+                actual_missing[text] = count - allowed_count
+
+        assert not actual_missing, (
+            f"{new_id} missing {len(actual_missing)} baseline strings; "
+            f"examples: {dict(sorted(actual_missing.items())[:3])}"
+        )
+
+    # Check for unexpected extra text: anything in rendered not in baseline
+    extra_counter = rendered_counter - expected_counter
+    assert not extra_counter, (
+        f"{new_id} renders {len(extra_counter)} unexpected strings not in baseline; "
+        f"examples: {dict(sorted(extra_counter.items())[:3])}"
     )
 
 
