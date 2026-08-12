@@ -6,6 +6,7 @@ code is never executed even if someone types its URL directly.
 from __future__ import annotations
 
 import html
+import logging
 
 import streamlit as st
 
@@ -16,6 +17,8 @@ from hub.runner import ExperimentRenderError, render_experiment
 
 OPEN_TS_KEY = "_hub.open_ts"
 OPEN_EXP_KEY = "_hub.open_exp"
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_access(row: dict | None, catalogue: dict[str, Experiment]) -> tuple[str, str]:
@@ -84,8 +87,14 @@ def render_experiment_page(engine, experiment_id: str, catalogue: dict) -> None:
     try:
         render_experiment(catalogue[experiment_id])
     except ExperimentRenderError as exc:
+        # This page is public with no login -- students, not the coordinator,
+        # are the audience. A full traceback (source paths, library internals,
+        # local frames) must never render here. The detail goes to the server
+        # log and to an analytics event the coordinator can see in the admin
+        # panel instead.
+        logger.exception("experiment %s failed to render", experiment_id)
+        analytics.track(engine, "experiment_error", experiment_id=experiment_id)
         st.error(
-            "This experiment could not be loaded. The course coordinator has been "
-            "shown the technical detail below."
+            "This experiment could not be loaded. The problem has been "
+            "reported automatically."
         )
-        st.exception(exc)
