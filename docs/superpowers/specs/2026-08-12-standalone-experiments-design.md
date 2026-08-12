@@ -55,6 +55,15 @@ entry function at all: their content sits inline under `if page_option == ...`
 (week 4) and inside `with tab1:` blocks (week 6). Their extraction is a lift of
 the inline block into a `render()`, not a move of an existing function.
 
+Week 6 is the extreme case. Its whole 544-line script runs at module level —
+problem configuration, primal and dual solve, the 3D feasible-region plot,
+shadow prices, the interactive experiment picker — and the three catalogue
+entries differ only in one 20–30 line tab body near the end (lines 394–411,
+412–436, 437–464). All three therefore render ~95% identical content today.
+That common page becomes `_kit/duality.py`, which the three experiment files
+call before rendering their own section. The three catalogue entries are kept,
+so they stay independently orderable and enable-able in the admin panel.
+
 Almost nothing is shared through direct calls. The real shared surface is the
 *preamble* weeks 7 and 8 run before their tabs — session-state init, the input
 sidebar, and the solve step that every tab in the file consumes:
@@ -77,6 +86,7 @@ experiments/
   _kit/
     dispatch.py                # week-7 preamble: state, generator sidebar, solve_all
     dc_network.py              # week-8 preamble: state, market solve, DC OPF
+    duality.py                 # the shared duality page (see below)
 ```
 
 Two placement rules:
@@ -111,8 +121,23 @@ It must not call `st.set_page_config` — the hub owns page config. Files in
 experiment in its own module there is nothing to isolate at runtime, so
 concurrent sessions stop serialising.
 
-`hub/state.py`'s `isolate()` is kept and keyed by experiment id: separate
-modules can still pick the same `st.session_state` key.
+`hub/state.py`'s `isolate()` is kept, because separate modules can still pick
+the same `st.session_state` key — `supply_bids` means different things in
+weeks 2 and 3.
+
+It is keyed by **state group**, not by experiment id. Today the key is the
+source file, so siblings share state deliberately: a student who configures
+generators in one week-7 experiment still has them in the next. Keying by id
+would wipe that. An experiment module may declare
+
+```python
+STATE_GROUP = "dispatch"
+```
+
+and the group defaults to the module's own name. Experiments sharing a `_kit`
+module share its group (`dispatch`, `dc_network`, `duality`), which reproduces
+today's behaviour exactly; every other experiment is its own group, which is
+stricter than today.
 
 ### Catalogue
 
@@ -192,9 +217,11 @@ directly:
 3. **Permanent check.** `tests/test_experiments_render.py` stays, retargeted at
    the new modules, so "all 25 render and produce output" remains enforced.
 
-Where an experiment's output legitimately differs — weeks 7 and 8 no longer
-render a shared sidebar once per file — the difference is recorded in the plan
-with its reason rather than silently accepted.
+One difference from baseline is intended and applies to weeks 2, 3 and 4: their
+module level prints dashboard branding into the sidebar — title, course code,
+coordinator, version — which renders inside every experiment page today. The
+hub supplies its own header, so the extraction drops those lines. Every other
+difference from baseline is a defect to investigate, not to accept.
 
 ## Accepted trade-off
 
