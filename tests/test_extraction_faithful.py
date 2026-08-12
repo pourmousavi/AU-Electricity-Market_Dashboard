@@ -25,6 +25,8 @@ EXTRACTED: dict[str, str] = {
     "market_power": "w3.market_power",
     "profit_cost_recovery": "w3.profit_cost_recovery",
     "interactive_clearing": "w3.interactive_clearing",
+    "modelling_tools_comparison": "w4.tools_comparison",
+    "nonlinear_optimisation_3d": "w4.nonlinear_3d",
 }
 
 
