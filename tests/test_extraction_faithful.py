@@ -27,6 +27,9 @@ EXTRACTED: dict[str, str] = {
     "interactive_clearing": "w3.interactive_clearing",
     "modelling_tools_comparison": "w4.tools_comparison",
     "nonlinear_optimisation_3d": "w4.nonlinear_3d",
+    "strong_duality": "w6.strong_duality",
+    "weak_duality": "w6.weak_duality",
+    "duality_theorems": "w6.duality_theorems",
 }
 
 
