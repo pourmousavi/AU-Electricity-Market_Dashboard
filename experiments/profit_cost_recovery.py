@@ -379,8 +379,9 @@ def render() -> None:
              "Working": "annualised CAPEX + fixed O&M",
              "Result": f"${fixed['total']/1e6:,.1f}M/yr"},
             {"Component": "Fuel cost",
-             "Working": f"{fuel_price:,.2f} $/GJ ÷ {efficiency_pct:.0f}% efficiency",
-             "Result": f"${fuel_price * 3.6 / (efficiency_pct/100):,.1f}/MWh"},
+             "Working": (f"{fuel_price:,.2f} $/GJ × {GJ_PER_MWH:.1f} GJ/MWh ÷ "
+                         f"{efficiency_pct:.0f}% efficiency"),
+             "Result": f"${fuel_price * GJ_PER_MWH / (efficiency_pct/100):,.1f}/MWh"},
             {"Component": "Marginal cost",
              "Working": f"fuel + {vom:,.1f} $/MWh variable O&M",
              "Result": f"${metrics['marginal_cost']:,.1f}/MWh"},
