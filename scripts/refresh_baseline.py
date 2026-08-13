@@ -131,16 +131,27 @@ def main(check_only: bool) -> None:
         key for key in captured
         if current.get(key, {}) != captured[key]
     )
-    if not changed:
+    # A key present in the current baseline but not in what was just
+    # captured (the experiment's catalogue key disappeared, or the
+    # experiment itself did) is dropped silently by the write below unless
+    # it is reported here too.
+    removed = sorted(set(current) - set(captured))
+
+    if not changed and not removed:
         print(f"no change: all {len(captured)} experiments match the baseline")
         return
 
     for key in changed:
         before_entry = current.get(key, {})
         after_entry = captured[key]
-        before_text = set(before_entry.get("text", []))
-        after_text = set(after_entry.get("text", []))
-        text_changed = before_text != after_text
+        before_text_list = before_entry.get("text", [])
+        after_text_list = after_entry.get("text", [])
+        before_text = set(before_text_list)
+        after_text = set(after_text_list)
+        # A pure reordering leaves these sets equal even though the entries
+        # (compared as ordered lists above, in `changed`) differ -- that is
+        # still a text change, not a counts-only one.
+        reordered = before_text == after_text and before_text_list != after_text_list
 
         before_counts = before_entry.get("counts", {})
         after_counts = after_entry.get("counts", {})
@@ -149,7 +160,7 @@ def main(check_only: bool) -> None:
             if before_counts.get(k) != after_counts.get(k)
         )
 
-        if text_changed:
+        if before_text != after_text:
             kind = "text+counts" if moved_counts else "text"
             print(f"\n{key} [{kind}]: -{len(before_text - after_text)} +{len(after_text - before_text)}")
             for text in sorted(before_text - after_text)[:3]:
@@ -158,20 +169,31 @@ def main(check_only: bool) -> None:
                 print(f"  + {text[:90]}")
             for count_key in moved_counts:
                 print(f"  counts.{count_key}: {before_counts.get(count_key)} -> {after_counts.get(count_key)}")
+        elif reordered:
+            kind = "text-reorder+counts" if moved_counts else "text-reorder"
+            print(f"\n{key} [{kind}]: same strings, different order")
+            for count_key in moved_counts:
+                print(f"  counts.{count_key}: {before_counts.get(count_key)} -> {after_counts.get(count_key)}")
         else:
-            # Text is byte-identical; only element counts moved. Report what
-            # moved and between what values so this is distinguishable at a
-            # glance from a real content change.
+            # Text is byte-identical and in the same order; only element
+            # counts moved. Report what moved and between what values so
+            # this is distinguishable at a glance from a real content change.
             print(f"\n{key} [counts-only]:")
             for count_key in moved_counts:
                 print(f"  counts.{count_key}: {before_counts.get(count_key)} -> {after_counts.get(count_key)}")
 
+    for key in removed:
+        print(f"\n{key} [removed]: no longer produced by the catalogue")
+
     if check_only:
-        print(f"\n--check: {len(changed)} experiment(s) would be rewritten")
+        total = len(changed) + len(removed)
+        print(f"\n--check: {total} experiment(s) would be rewritten "
+              f"({len(changed)} changed, {len(removed)} removed)")
         return
 
     OUT.write_text(json.dumps(captured, indent=2, sort_keys=True), encoding="utf-8")
-    print(f"\nrewrote {OUT.relative_to(ROOT)} for {len(changed)} experiment(s)")
+    print(f"\nrewrote {OUT.relative_to(ROOT)} for {len(changed)} experiment(s), "
+          f"dropped {len(removed)} removed key(s)")
 
 
 if __name__ == "__main__":
