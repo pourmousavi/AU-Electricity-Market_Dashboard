@@ -254,3 +254,119 @@ def test_price_duration_plot_shades_running_hours_not_total_hours() -> None:
         width = trace.x[1] - trace.x[0]
         assert width == pytest.approx(band["running_hours"])
 
+
+
+# --- Plant size: scale economies and the market's appetite -----------------
+#
+# Two effects pull in opposite directions as a plant gets bigger, and together
+# they give plant size an optimum, which a flat $/kW model cannot express:
+#
+#   * CAPEX per kW falls with size (the scale exponent), pushing returns up;
+#   * the market can only absorb so much output in any hour, so beyond that
+#     limit the extra megawatts sit idle in every band while still being paid
+#     for, pulling returns down.
+
+from experiments.profit_cost_recovery import (  # noqa: E402
+    REFERENCE_CAPACITY_MW,
+    scaled_capex_per_kw,
+)
+
+
+def test_a_unit_exponent_means_no_scale_effect() -> None:
+    """Exponent 1.0 must reproduce today's flat $/kW at any size."""
+    for mw in (100.0, 400.0, 1500.0):
+        assert scaled_capex_per_kw(900.0, mw, 1.0) == pytest.approx(900.0)
+
+
+def test_at_the_reference_size_any_exponent_is_a_no_op() -> None:
+    for exponent in (0.6, 0.85, 1.0):
+        assert scaled_capex_per_kw(900.0, REFERENCE_CAPACITY_MW, exponent) == (
+            pytest.approx(900.0)
+        )
+
+
+def test_bigger_plants_cost_less_per_kw() -> None:
+    """Hand-checked: 900 x (mw/400)^(0.85-1)."""
+    assert scaled_capex_per_kw(900.0, 200.0, 0.85) == pytest.approx(999.0, abs=1.0)
+    assert scaled_capex_per_kw(900.0, 1000.0, 0.85) == pytest.approx(784.0, abs=1.0)
+
+
+def test_scale_economies_alone_make_returns_rise_with_size() -> None:
+    """Without an absorption limit, bigger is simply better."""
+    returns = [
+        investment_metrics(**dict(EXAMPLE, capacity_mw=mw, scale_exponent=0.85))[
+            "achieved_return"
+        ]
+        for mw in (200.0, 400.0, 800.0)
+    ]
+    assert returns == sorted(returns)
+
+
+def test_without_a_scale_exponent_returns_are_flat_in_size() -> None:
+    """The property this feature exists to break: every term is linear in
+    capacity, so the ratio setting the return cancels it out."""
+    returns = {
+        investment_metrics(**dict(EXAMPLE, capacity_mw=mw))["achieved_return"]
+        for mw in (200.0, 400.0, 600.0)
+    }
+    assert len(returns) == 1
+
+
+def test_capacity_beyond_what_the_market_absorbs_earns_nothing() -> None:
+    capped = investment_metrics(**dict(EXAMPLE, capacity_mw=800.0, absorption_mw=400.0))
+    reference = investment_metrics(**dict(EXAMPLE, capacity_mw=400.0))
+    assert capped["revenue"] == pytest.approx(reference["revenue"])
+    assert capped["energy"] == pytest.approx(reference["energy"])
+    # ...but the idle half is still built and still maintained.
+    assert capped["fixed"]["total"] == pytest.approx(2 * reference["fixed"]["total"])
+
+
+def test_an_absorption_limit_above_capacity_changes_nothing() -> None:
+    assert investment_metrics(**dict(EXAMPLE, absorption_mw=5000.0)) == (
+        investment_metrics(**EXAMPLE)
+    )
+
+
+# The sizing scenario the teaching notes ask a student to type in. Its whole
+# point is that viability has an upper bound as well as a lower one, which the
+# flat-$/kW model could never show: too small and scale economies have not
+# arrived, too large and the extra capacity is unsellable.
+SIZING_SCENARIO = dict(
+    life_years=25, capex_per_kw=1400.0, wacc=0.07, fom_per_kw=25.0,
+    fuel_price=9.5, efficiency_pct=33.0, vom=4.0,
+    forced_outage_rate=0.08, planned_days=0.0,
+    bands=[
+        {"price": 45.0, "hours": 4000.0},
+        {"price": 85.0, "hours": 3500.0},
+        {"price": 220.0, "hours": 1160.0},
+        {"price": 253.0, "hours": 100.0},
+    ],
+    scale_exponent=0.85, absorption_mw=1000.0,
+)
+
+
+@pytest.mark.parametrize("capacity_mw,expected_return,viable", [
+    (400.0, 5.88, False),
+    (600.0, 6.53, False),
+    (800.0, 7.00, True),
+    (1000.0, 7.38, True),
+    (1200.0, 5.21, False),
+])
+def test_the_sizing_scenario_is_viable_only_between_800_and_1000_mw(
+    capacity_mw: float, expected_return: float, viable: bool
+) -> None:
+    m = investment_metrics(capacity_mw=capacity_mw, **SIZING_SCENARIO)
+    assert m["achieved_return"] * 100 == pytest.approx(expected_return, abs=0.02)
+    assert m["is_viable"] is viable
+
+
+def test_the_sizing_scenario_peaks_at_the_absorption_limit() -> None:
+    """Returns rise to the limit, then fall — the shape is the lesson."""
+    returns = [
+        investment_metrics(capacity_mw=mw, **SIZING_SCENARIO)["achieved_return"]
+        for mw in (400.0, 700.0, 1000.0, 1300.0, 1600.0)
+    ]
+    peak = returns.index(max(returns))
+    assert peak == 2, "the peak must sit at the 1000 MW absorption limit"
+    assert returns[:3] == sorted(returns[:3])
+    assert returns[2:] == sorted(returns[2:], reverse=True)

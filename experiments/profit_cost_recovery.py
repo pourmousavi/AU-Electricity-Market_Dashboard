@@ -19,6 +19,10 @@ import plotly.express as px
 GJ_PER_MWH = 3.6
 HOURS_PER_YEAR = 8760
 
+# The plant size the quoted $/kW refers to. Scale economies are expressed
+# relative to it, so at this size the figure a student types is the figure used.
+REFERENCE_CAPACITY_MW = 400.0
+
 
 def capital_recovery_factor(rate: float, years: int) -> float:
     """The fraction of capital that must be repaid each year.
@@ -43,10 +47,27 @@ def marginal_cost(fuel_price: float, efficiency_pct: float, vom: float) -> float
     return fuel_price * heat_rate + vom
 
 
-def annual_fixed_cost(capex_per_kw, capacity_mw, wacc, life_years, fom_per_kw) -> dict:
+def scaled_capex_per_kw(capex_per_kw, capacity_mw, scale_exponent,
+                        reference_mw=REFERENCE_CAPACITY_MW) -> float:
+    """$/kW at this size, from a cost quoted at the reference size.
+
+    Bigger plants cost less per kW: a turbine hall, a connection and a control
+    room do not double when the machine does. The standard way to express that
+    is an exponent on TOTAL cost, cost ∝ size^e with e below 1, which leaves
+    the per-kW figure moving as size^(e-1). At e = 1 there are no scale
+    economies and this returns the quoted figure unchanged at every size.
+    """
+    if capacity_mw <= 0 or reference_mw <= 0:
+        return capex_per_kw
+    return capex_per_kw * (capacity_mw / reference_mw) ** (scale_exponent - 1)
+
+
+def annual_fixed_cost(capex_per_kw, capacity_mw, wacc, life_years, fom_per_kw,
+                      scale_exponent: float = 1.0) -> dict:
     """Annualised CAPEX and fixed O&M, each kept separate for display."""
     capacity_kw = capacity_mw * 1000
-    capex_total = capex_per_kw * capacity_kw
+    per_kw = scaled_capex_per_kw(capex_per_kw, capacity_mw, scale_exponent)
+    capex_total = per_kw * capacity_kw
     crf = capital_recovery_factor(wacc, life_years)
     annualised_capex = capex_total * crf
     fixed_om = fom_per_kw * capacity_kw
@@ -118,15 +139,24 @@ def achieved_return(capex_total: float, annual_cash_flow: float,
 
 def investment_metrics(capacity_mw, life_years, capex_per_kw, wacc, fom_per_kw,
                        fuel_price, efficiency_pct, vom, forced_outage_rate,
-                       planned_days, bands) -> dict:
-    """Everything the page displays, from what the student typed."""
+                       planned_days, bands, scale_exponent: float = 1.0,
+                       absorption_mw: float | None = None) -> dict:
+    """Everything the page displays, from what the student typed.
+
+    `absorption_mw` is the most this plant can actually sell in any hour --
+    the room the market has for it. Capacity beyond that limit is built and
+    maintained but never sells anything, which is what gives plant size an
+    optimum rather than making bigger always better.
+    """
     mc = marginal_cost(fuel_price, efficiency_pct, vom)
-    fixed = annual_fixed_cost(capex_per_kw, capacity_mw, wacc, life_years, fom_per_kw)
+    fixed = annual_fixed_cost(capex_per_kw, capacity_mw, wacc, life_years,
+                              fom_per_kw, scale_exponent)
     dispatched = dispatch(bands, mc, forced_outage_rate, planned_days)
 
+    sold_mw = capacity_mw if absorption_mw is None else min(capacity_mw, absorption_mw)
     running_hours = sum(band["running_hours"] for band in dispatched)
-    energy = capacity_mw * running_hours
-    revenue = sum(band["price"] * capacity_mw * band["running_hours"]
+    energy = sold_mw * running_hours
+    revenue = sum(band["price"] * sold_mw * band["running_hours"]
                   for band in dispatched)
     variable_cost = mc * energy
     short_run_profit = revenue - variable_cost
@@ -142,6 +172,9 @@ def investment_metrics(capacity_mw, life_years, capex_per_kw, wacc, fom_per_kw,
         "variable_cost": variable_cost,
         "short_run_profit": short_run_profit,
         "long_run_profit": long_run_profit,
+        "sold_mw": sold_mw,
+        "idle_mw": capacity_mw - sold_mw,
+        "capex_per_kw": fixed["capex_total"] / (capacity_mw * 1000),
         "capacity_factor": 100 * energy / (capacity_mw * HOURS_PER_YEAR),
         "required_return": wacc,
         "achieved_return": achieved_return(
@@ -296,7 +329,7 @@ def render() -> None:
         st.subheader("Investment Parameters")
 
         st.markdown("**Plant**")
-        capacity = st.slider("Capacity (MW)", 100, 1000, 400, 50, key="profit_capacity")
+        capacity = st.slider("Capacity (MW)", 100, 2000, 400, 50, key="profit_capacity")
         life_years = st.slider("Technical life (years)", 10, 40, 25, 5,
                                key="profit_life")
 
@@ -304,7 +337,20 @@ def render() -> None:
         capex_per_kw = st.number_input(
             "Overnight capital cost ($/kW)", 100, 6000, 900, 50,
             key="profit_capex",
-            help="What it costs to build, per kW of capacity, before financing.",
+            help=(
+                f"What it costs to build, per kW, before financing — quoted at "
+                f"the reference size of {REFERENCE_CAPACITY_MW:,.0f} MW. The "
+                "scale exponent below adjusts it for other sizes."
+            ),
+        )
+        scale_exponent = st.slider(
+            "CAPEX scale exponent", 0.60, 1.00, 0.85, 0.05,
+            key="profit_scale",
+            help=(
+                "Bigger plants cost less per kW: total cost rises as size^e. "
+                "At 1.00 there are no scale economies and $/kW is flat, which "
+                "makes the return on capital identical at every size."
+            ),
         )
         wacc = st.slider("WACC — required return (%)", 3.0, 15.0, 7.0, 0.5,
                          key="profit_wacc") / 100
@@ -352,19 +398,46 @@ def render() -> None:
                 "Results are still shown, but the capacity factor will not mean much."
             )
 
+        absorption_mw = st.number_input(
+            "Market absorption limit (MW)", 100, 3000, 2000, 50,
+            key="profit_absorption",
+            help=(
+                "The most this plant can actually sell in any hour — the room "
+                "the market has for it. Capacity beyond this is built and "
+                "maintained but never sells, so it drags the return down."
+            ),
+        )
+
         metrics = investment_metrics(
             capacity_mw=capacity, life_years=life_years,
             capex_per_kw=capex_per_kw, wacc=wacc, fom_per_kw=fom_per_kw,
             fuel_price=fuel_price, efficiency_pct=efficiency_pct, vom=vom,
             forced_outage_rate=forced_outage_rate, planned_days=planned_days,
-            bands=bands,
+            bands=bands, scale_exponent=scale_exponent,
+            absorption_mw=float(absorption_mw),
         )
 
         st.markdown("**Where the numbers come from**")
         fixed = metrics["fixed"]
-        st.dataframe(pd.DataFrame([
+        scale_rows = []
+        if abs(metrics["capex_per_kw"] - capex_per_kw) > 0.5:
+            scale_rows.append({
+                "Component": "Scale adjustment",
+                "Working": (f"{capex_per_kw:,.0f} $/kW × ({capacity:,.0f}/"
+                            f"{REFERENCE_CAPACITY_MW:,.0f})^({scale_exponent:.2f}−1)"),
+                "Result": f"${metrics['capex_per_kw']:,.0f}/kW",
+            })
+        if metrics["idle_mw"] > 0:
+            scale_rows.append({
+                "Component": "Unsellable capacity",
+                "Working": (f"{capacity:,.0f} MW built − {metrics['sold_mw']:,.0f} MW "
+                            "the market can take"),
+                "Result": f"{metrics['idle_mw']:,.0f} MW idle in every hour",
+            })
+
+        st.dataframe(pd.DataFrame(scale_rows + [
             {"Component": "Overnight CAPEX",
-             "Working": f"{capex_per_kw:,.0f} $/kW × {capacity:,.0f} MW",
+             "Working": f"{metrics['capex_per_kw']:,.0f} $/kW × {capacity:,.0f} MW",
              "Result": f"${fixed['capex_total']/1e6:,.1f}M"},
             {"Component": "Capital recovery factor",
              "Working": f"{wacc*100:.1f}% over {life_years} years",
@@ -547,6 +620,41 @@ def render() -> None:
         it in the cheapest hours — where the plant would not have run anyway.
         Raise the maintenance days and see how little the profit moves; raise
         the forced outage rate by the same amount and see how much it does.
+
+        **Why plant size has an optimum**
+
+        Two effects pull against each other. Building bigger spreads the fixed
+        parts of a project — the connection, the control room, the civil works —
+        over more kW, so **CAPEX per kW falls**; that is the scale exponent, and
+        with it the return on capital rises with size. But a market only has so
+        much room: past the **absorption limit** the extra megawatts are built
+        and maintained yet never sell anything, so they add capital without
+        adding revenue and the return falls again.
+
+        With the exponent at 1.00 and the absorption limit above your capacity,
+        neither effect operates and the return on capital is *identical at every
+        plant size* — every term in the calculation is proportional to capacity,
+        so it cancels out. Worth seeing once: it is the clearest way to
+        understand what the two effects actually add.
+
+        **Try this — a plant that is only worth building at one size**
+
+        Set CAPEX **1400 $/kW**, the scarcity band to **253 $/MWh** over 100
+        hours, the absorption limit to **1000 MW**, exponent **0.85**, and leave
+        everything else. Then sweep the capacity slider:
+
+        | Capacity | Return on capital | |
+        |---|---|---|
+        | 400 MW | 5.9% | too small — scale economies have not arrived |
+        | 600 MW | 6.5% | still short of the 7% required |
+        | 800 MW | 7.0% | viable |
+        | 1000 MW | 7.4% | best — exactly at the market's limit |
+        | 1200 MW | 5.2% | 200 MW that can never be sold |
+
+        Viable only between roughly 800 and 1000 MW. Too small and the capital
+        is too dear per kW; too large and you have built something the market
+        cannot absorb. Neither end is visible in a model where cost per kW is
+        flat and the market is bottomless.
         """)
 
         st.markdown("""
