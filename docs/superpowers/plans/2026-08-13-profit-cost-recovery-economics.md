@@ -160,10 +160,17 @@ def test_the_worked_example_end_to_end() -> None:
     assert m["is_viable"] is True
 
 
-def test_scarcity_band_alone_decides_this_plant() -> None:
-    """The teaching point: 92 hours of the year carry the investment."""
-    without_scarcity = dict(EXAMPLE, bands=BANDS[:3])
-    assert investment_metrics(**without_scarcity)["long_run_profit"] < 0
+def test_the_scarcity_band_carries_most_of_the_profit() -> None:
+    """The teaching point: 92 hours a year supply 78% of the long-run profit.
+
+    Checked by hand: with the scarcity band the plant clears $32.55M, without
+    it $7.07M. It stays viable either way -- the lesson is the concentration,
+    not a sign flip.
+    """
+    with_scarcity = investment_metrics(**EXAMPLE)["long_run_profit"]
+    without = investment_metrics(**dict(EXAMPLE, bands=BANDS[:3]))["long_run_profit"]
+    assert without == pytest.approx(7_070_000, rel=1e-2)
+    assert (with_scarcity - without) / with_scarcity == pytest.approx(0.783, abs=0.01)
 
 
 def test_a_plant_priced_out_of_every_band_earns_nothing() -> None:
@@ -748,8 +755,8 @@ Replace the `if latest['marginal_cost'] > 500:` chain and the RoR comparison ben
                     st.info(
                         f"🔥 A peaking profile: {latest['capacity_factor']:.1f}% "
                         f"capacity factor over {latest['running_hours']:,.0f} hours. "
-                        "Viability rests on the scarcity band — try deleting its "
-                        "hours and watch the long-run profit."
+                        "Most of the profit comes from the dearest band — set its "
+                        "hours to zero and watch how much of it goes."
                     )
                 elif latest["capacity_factor"] > 70:
                     st.success(
@@ -796,9 +803,10 @@ Inside the existing `st.expander("📚 Educational Content")`, insert this immed
 
         In every hour it runs, the plant earns price minus marginal cost. That
         margin is **scarcity rent**, and it is the only thing available to pay
-        back CAPEX and fixed O&M. A peaker may run 10% of the year and still be
-        viable, because a hundred hours at $800/MWh contribute more than
-        thousands of hours at $45. Delete the scarcity band and watch it fail.
+        back CAPEX and fixed O&M. With the defaults, the 100 scarcity hours are
+        1% of the year and supply about 78% of the long-run profit: a hundred
+        hours at $800/MWh contribute far more than thousands at $45. Set the
+        scarcity band's hours to zero and watch most of the profit disappear.
 
         **Why outage scheduling is an economic decision**
 
@@ -856,7 +864,7 @@ Run: `.venv/bin/python -m streamlit run app.py`
 
 Open Profit & Fixed Cost Recovery and confirm, by hand:
 1. With the defaults, marginal cost reads ~$107.6/MWh, annual fixed ~$40.9M, capacity factor ~13.2%, long-run profit ~+$32.6M, return on capital ~17.3%.
-2. Setting the scarcity band's hours to 0 flips it to not viable.
+2. Setting the scarcity band's hours to 0 drops long-run profit to ~+$7.1M — still viable, but 78% of the profit gone.
 3. Raising planned maintenance to 60 days barely moves long-run profit; raising the forced outage rate from 8% to 20% moves it materially.
 4. The waterfall's last bar equals the long-run profit metric.
 

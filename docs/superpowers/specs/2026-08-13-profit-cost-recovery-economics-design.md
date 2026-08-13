@@ -188,8 +188,11 @@ efficiency, VOM $4/MWh, forced outage rate 8%, bands as defaulted above:
 must reproduce these to the stated precision.)
 
 The teaching point the current version cannot make: this plant is viable while
-running 13% of the year, *because* of 92 scarcity hours. Deleting the scarcity
-band alone turns it into a loss.
+running 13% of the year, and the 92 available scarcity hours — 1% of the year —
+supply **78%** of its long-run profit. Remove the scarcity band and the plant
+still clears $7.07M, so the lesson is the concentration of the return, not a
+sign flip. (An earlier draft of this spec claimed removal made it unviable;
+that was checked and is false.)
 
 ### Educational content
 
