@@ -192,3 +192,65 @@ def test_the_waterfall_adds_up_to_long_run_profit() -> None:
     )
 
 
+def test_the_waterfall_pins_each_label_to_its_own_value() -> None:
+    """Closing to the right total is not enough -- swapping two bars (or their
+    labels) still closes. Pin each bar's value and text to its own label so
+    that mutation is caught too.
+    """
+    from experiments.profit_cost_recovery import create_waterfall_plot
+
+    m = investment_metrics(**EXAMPLE)
+    fixed = m["fixed"]
+    trace = create_waterfall_plot(m).data[0]
+    labels = list(trace.x)
+    values = list(trace.y)
+    text = list(trace.text)
+
+    expected_values = {
+        "Revenue": m["revenue"] / 1e6,
+        "Variable cost": -m["variable_cost"] / 1e6,
+        "Annualised CAPEX": -fixed["annualised_capex"] / 1e6,
+        "Fixed O&M": -fixed["fixed_om"] / 1e6,
+    }
+    for label, value in expected_values.items():
+        assert values[labels.index(label)] == pytest.approx(value)
+
+    expected_text = {
+        "Revenue": f"${m['revenue']/1e6:,.1f}M",
+        "Variable cost": f"−${m['variable_cost']/1e6:,.1f}M",
+        "Annualised CAPEX": f"−${fixed['annualised_capex']/1e6:,.1f}M",
+        "Fixed O&M": f"−${fixed['fixed_om']/1e6:,.1f}M",
+    }
+    for label, expected in expected_text.items():
+        assert text[labels.index(label)] == expected
+
+
+def test_price_duration_plot_shades_running_hours_not_total_hours() -> None:
+    """The shaded block is the hours the plant runs, not the hours in the band.
+
+    Shading `band["hours"]` instead of `band["running_hours"]` would overstate
+    a plant's running hours by the forced-outage rate -- exactly what this
+    chart exists to show correctly.
+    """
+    from experiments.profit_cost_recovery import create_price_duration_plot
+
+    m = investment_metrics(**EXAMPLE)
+    fig = create_price_duration_plot(m)
+
+    shaded = [trace for trace in fig.data if trace.fill == "toself"]
+    in_merit = [b for b in m["dispatched"] if b["running_hours"] > 0]
+    out_of_merit = [b for b in m["dispatched"] if b["running_hours"] == 0]
+
+    # Sanity check that the worked example actually exercises both cases.
+    assert in_merit and out_of_merit
+
+    # Out-of-merit bands must not produce a shaded trace at all.
+    assert len(shaded) == len(in_merit)
+
+    # Shaded traces are added dearest-first, same order as `ordered` inside
+    # the plot function.
+    ordered_in_merit = sorted(in_merit, key=lambda band: -band["price"])
+    for trace, band in zip(shaded, ordered_in_merit):
+        width = trace.x[1] - trace.x[0]
+        assert width == pytest.approx(band["running_hours"])
+
