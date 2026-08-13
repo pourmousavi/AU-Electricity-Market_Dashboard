@@ -148,92 +148,85 @@ def investment_metrics(capacity_mw, life_years, capex_per_kw, wacc, fom_per_kw,
     }
 
 
-def create_profit_analysis_plot(analysis_points):
-    """Create profit and cost recovery analysis plot"""
-    fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=("Investment Viability Gauge", "Rate of Return Analysis", 
-                       "Revenue vs Cost Breakdown", "Capacity Factor Distribution"),
-        specs=[[{"type": "indicator"}, {"type": "bar"}],
-               [{"type": "bar"}, {"type": "pie"}]]
+def create_price_duration_plot(metrics) -> go.Figure:
+    """The price-duration curve, with the hours this plant runs shaded.
+
+    This is the chart that answers "which hours pay for the plant". Bands are
+    ordered dearest first, the classic price-duration shape, with marginal cost
+    drawn across it: everything above the line and inside a shaded block is
+    scarcity rent.
+    """
+    ordered = sorted(metrics["dispatched"], key=lambda band: -band["price"])
+    mc = metrics["marginal_cost"]
+    fig = go.Figure()
+
+    cursor = 0.0
+    xs, ys = [], []
+    for band in ordered:
+        xs += [cursor, cursor + band["hours"]]
+        ys += [band["price"], band["price"]]
+        if band["running_hours"] > 0:
+            fig.add_trace(go.Scatter(
+                x=[cursor, cursor + band["running_hours"],
+                   cursor + band["running_hours"], cursor, cursor],
+                y=[mc, mc, band["price"], band["price"], mc],
+                fill="toself", fillcolor="rgba(78, 205, 196, 0.35)",
+                mode="none", showlegend=False,
+                hovertemplate=(
+                    f"${band['price']:,.0f}/MWh for "
+                    f"{band['running_hours']:,.0f} h<br>"
+                    f"margin ${band['price'] - mc:,.0f}/MWh<extra></extra>"
+                ),
+            ))
+        cursor += band["hours"]
+
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="lines", name="Price-duration curve",
+        line=dict(color="#1f77b4", width=3),
+        hovertemplate="%{y:$,.0f}/MWh<extra></extra>",
+    ))
+    fig.add_hline(
+        y=mc, line_dash="dash", line_color="#FF6B6B",
+        annotation_text=f"marginal cost ${mc:,.0f}/MWh",
+        annotation_position="top right",
     )
-    
-    if analysis_points:
-        latest = analysis_points[-1]
-        
-        # Investment viability gauge
-        fig.add_trace(
-            go.Indicator(
-                mode="gauge+number+delta",
-                value=latest['long_run_profit']/1_000_000,
-                domain={'x': [0, 1], 'y': [0, 1]},
-                title={'text': "Long-run Profit ($M)"},
-                delta={'reference': 0},
-                gauge={
-                    'axis': {'range': [-100, 100]},
-                    'bar': {'color': "#4ECDC4" if latest['is_viable'] else "#FF6B6B"},
-                    'steps': [
-                        {'range': [-100, 0], 'color': "lightcoral"},
-                        {'range': [0, 100], 'color': "lightgreen"}
-                    ],
-                    'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 0}
-                }
-            ),
-            row=1, col=1
-        )
-        
-        # Rate of return comparison
-        ror_categories = ['Required RoR', 'Actual RoR']
-        ror_values = [latest['required_ror'] * 100, latest['actual_ror'] * 100]
-        ror_colors = ['#FF6B6B', '#4ECDC4' if latest['actual_ror'] >= latest['required_ror'] else '#FF6B6B']
-        
-        fig.add_trace(
-            go.Bar(x=ror_categories, y=ror_values, name="Rate of Return",
-                   marker_color=ror_colors, showlegend=False,
-                   text=[f"{val:.1f}%" for val in ror_values],
-                   textposition="outside"),
-            row=1, col=2
-        )
-        
-        # Revenue vs Cost breakdown
-        financial_categories = ['Revenue', 'Variable Cost', 'Fixed Cost', 'Profit']
-        financial_values = [
-            latest['total_revenue']/1_000_000,
-            latest['total_variable_cost']/1_000_000,
-            (latest['total_revenue'] - latest['short_run_profit'])/1_000_000,
-            latest['long_run_profit']/1_000_000
-        ]
-        financial_colors = ['#4ECDC4', '#FF6B6B', '#FFA500', 
-                           '#32CD32' if latest['long_run_profit'] > 0 else '#FF4500']
-        
-        fig.add_trace(
-            go.Bar(x=financial_categories, y=financial_values, name="Financial Breakdown",
-                   marker_color=financial_colors, showlegend=False,
-                   text=[f"${val:.1f}M" for val in financial_values],
-                   textposition="outside"),
-            row=2, col=1
-        )
-        
-        # Capacity factor distribution
-        operating_hours = latest['total_hours']
-        idle_hours = 8760 - operating_hours
-        fig.add_trace(
-            go.Pie(labels=['Operating', 'Idle'], 
-                   values=[operating_hours, idle_hours],
-                   marker_colors=['#4ECDC4', '#F0F0F0'], 
-                   showlegend=False,
-                   textinfo='label+percent',
-                   hovertemplate='%{label}: %{value} hours<br>%{percent}<extra></extra>'),
-            row=2, col=2
-        )
-    
-    fig.update_layout(height=700, title_text="Investment Financial Analysis")
-    fig.update_yaxes(title_text="Return (%)", row=1, col=2)
-    fig.update_xaxes(title_text="Metric", row=1, col=2)
-    fig.update_yaxes(title_text="Amount ($M)", row=2, col=1)
-    fig.update_xaxes(title_text="Category", row=2, col=1)
-    
+    fig.update_layout(
+        title="When does this plant run, and what does it earn?",
+        xaxis_title="Hours per year (dearest first)",
+        yaxis_title="Price ($/MWh)",
+        height=420, hovermode="closest",
+    )
     return fig
+
+
+def create_waterfall_plot(metrics) -> go.Figure:
+    """Revenue down to long-run profit, one bar per real quantity."""
+    fixed = metrics["fixed"]
+    fig = go.Figure(go.Waterfall(
+        orientation="v",
+        measure=["absolute", "relative", "total", "relative", "relative", "total"],
+        x=["Revenue", "Variable cost", "Short-run profit",
+           "Annualised CAPEX", "Fixed O&M", "Long-run profit"],
+        y=[metrics["revenue"] / 1e6, -metrics["variable_cost"] / 1e6, 0,
+           -fixed["annualised_capex"] / 1e6, -fixed["fixed_om"] / 1e6, 0],
+        text=[f"${metrics['revenue']/1e6:,.1f}M",
+              f"−${metrics['variable_cost']/1e6:,.1f}M",
+              f"${metrics['short_run_profit']/1e6:,.1f}M",
+              f"−${fixed['annualised_capex']/1e6:,.1f}M",
+              f"−${fixed['fixed_om']/1e6:,.1f}M",
+              f"${metrics['long_run_profit']/1e6:,.1f}M"],
+        textposition="outside",
+        connector={"line": {"color": "rgba(0,0,0,0.3)"}},
+        increasing={"marker": {"color": "#4ECDC4"}},
+        decreasing={"marker": {"color": "#FF6B6B"}},
+        totals={"marker": {"color": "#1f77b4"}},
+    ))
+    fig.update_layout(
+        title="From revenue to long-run profit",
+        yaxis_title="$M per year", height=420, showlegend=False,
+    )
+    return fig
+
 
 DEFAULT_BANDS = [
     {"Band": "Off-peak", "Price ($/MWh)": 45.0, "Hours/year": 4000.0},
@@ -362,9 +355,11 @@ def render() -> None:
              "Result": f"${metrics['marginal_cost']:,.1f}/MWh"},
         ]), use_container_width=True, hide_index=True)
 
-        # Create plot
-        fig = create_profit_analysis_plot(st.session_state.profit_analysis_data)
-        st.plotly_chart(fig, use_container_width=True, key="profit_plot")
+        # Create plots
+        st.plotly_chart(create_price_duration_plot(metrics),
+                        use_container_width=True, key="profit_duration_plot")
+        st.plotly_chart(create_waterfall_plot(metrics),
+                        use_container_width=True, key="profit_waterfall_plot")
 
         # Analysis
         if st.button("Analyze Investment", type="primary", key="profit_add"):

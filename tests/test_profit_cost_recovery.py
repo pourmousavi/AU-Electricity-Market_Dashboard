@@ -135,3 +135,15 @@ def test_a_plant_priced_out_of_every_band_earns_nothing() -> None:
 def test_a_fully_available_plant_runs_every_in_merit_hour() -> None:
     m = investment_metrics(**dict(EXAMPLE, forced_outage_rate=0.0))
     assert m["running_hours"] == pytest.approx(1260.0)
+
+
+def test_the_waterfall_adds_up_to_long_run_profit() -> None:
+    """A waterfall that does not close is worse than no waterfall."""
+    from experiments.profit_cost_recovery import create_waterfall_plot
+
+    m = investment_metrics(**EXAMPLE)
+    steps = create_waterfall_plot(m).data[0].y
+    revenue, less_variable, _, less_capex, less_fom, _ = steps
+    assert revenue + less_variable + less_capex + less_fom == pytest.approx(
+        m["long_run_profit"] / 1e6
+    )
