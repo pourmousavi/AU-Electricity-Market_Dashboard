@@ -7,7 +7,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots
 
 # --- Economics -------------------------------------------------------------
 #
@@ -364,18 +363,19 @@ def render() -> None:
         # Analysis
         if st.button("Analyze Investment", type="primary", key="profit_add"):
             st.session_state.profit_analysis_data.append({
-                'capacity': capacity,
-                'marginal_cost': marginal_cost,
-                'capacity_factor': capacity_factor_input,
-                'total_revenue': metrics['total_revenue'],
-                'total_variable_cost': metrics['total_variable_cost'],
-                'short_run_profit': metrics['short_run_profit'],
-                'long_run_profit': metrics['long_run_profit'],
-                'required_ror': metrics['required_ror'],
-                'actual_ror': metrics['actual_ror'],
-                'is_viable': metrics['is_viable'],
-                'total_hours': metrics['total_hours'],
-                'avg_market_price': metrics['avg_market_price']
+                "capacity": capacity,
+                "marginal_cost": metrics["marginal_cost"],
+                "capex_per_kw": capex_per_kw,
+                "annual_fixed": metrics["fixed"]["total"],
+                "capacity_factor": metrics["capacity_factor"],
+                "running_hours": metrics["running_hours"],
+                "revenue": metrics["revenue"],
+                "variable_cost": metrics["variable_cost"],
+                "short_run_profit": metrics["short_run_profit"],
+                "long_run_profit": metrics["long_run_profit"],
+                "required_return": metrics["required_return"],
+                "achieved_return": metrics["achieved_return"],
+                "is_viable": metrics["is_viable"],
             })
             st.rerun()
 
@@ -419,18 +419,20 @@ def render() -> None:
             table_data = []
             for i, point in enumerate(st.session_state.profit_analysis_data):
                 table_data.append({
-                    'Scenario': i + 1,
-                    'Capacity (MW)': point['capacity'],
-                    'MC ($/MWh)': point['marginal_cost'],
-                    'CF (%)': f"{point['capacity_factor']:.1f}",
-                    'Market Price ($/MWh)': f"{point['avg_market_price']:.0f}",
-                    'Revenue ($M)': f"{point['total_revenue']/1_000_000:.1f}",
-                    'Variable Cost ($M)': f"{point['total_variable_cost']/1_000_000:.1f}",
-                    'Short-run Profit ($M)': f"{point['short_run_profit']/1_000_000:.1f}",
-                    'Long-run Profit ($M)': f"{point['long_run_profit']/1_000_000:.1f}",
-                    'Required RoR (%)': f"{point['required_ror']*100:.1f}",
-                    'Actual RoR (%)': f"{point['actual_ror']*100:.1f}",
-                    'Viable': "✅" if point['is_viable'] else "❌"
+                    "Scenario": i + 1,
+                    "MW": point["capacity"],
+                    "CAPEX ($/kW)": f"{point['capex_per_kw']:,.0f}",
+                    "MC ($/MWh)": f"{point['marginal_cost']:,.1f}",
+                    "Fixed ($M/yr)": f"{point['annual_fixed']/1e6:,.1f}",
+                    "Run hours": f"{point['running_hours']:,.0f}",
+                    "CF (%)": f"{point['capacity_factor']:.1f}",
+                    "Revenue ($M)": f"{point['revenue']/1e6:,.1f}",
+                    "SR profit ($M)": f"{point['short_run_profit']/1e6:,.1f}",
+                    "LR profit ($M)": f"{point['long_run_profit']/1e6:,.1f}",
+                    "Required (%)": f"{point['required_return']*100:.1f}",
+                    "Achieved (%)": ("—" if point["achieved_return"] is None
+                                     else f"{point['achieved_return']*100:.1f}"),
+                    "Viable": "✅" if point["is_viable"] else "❌",
                 })
 
             results_df = pd.DataFrame(table_data)
@@ -441,24 +443,80 @@ def render() -> None:
             if st.session_state.profit_analysis_data:
                 latest = st.session_state.profit_analysis_data[-1]
 
-                if latest['marginal_cost'] > 500:
-                    st.warning("⚡ Very high marginal cost - suitable only for emergency/scarcity pricing scenarios")
-                elif latest['marginal_cost'] > 200:
-                    st.info("🔥 High marginal cost - peaking plant requiring scarcity rents for viability")
-                elif latest['marginal_cost'] < 20:
-                    st.success("🌱 Low marginal cost - likely baseload renewable or nuclear technology")
+                if latest["running_hours"] == 0:
+                    st.error(
+                        "🚫 This plant never runs: no price band beats its marginal "
+                        f"cost of ${latest['marginal_cost']:,.0f}/MWh. It loses its "
+                        f"whole fixed cost of ${latest['annual_fixed']/1e6:,.1f}M."
+                    )
+                elif latest["capacity_factor"] < 20:
+                    st.info(
+                        f"🔥 A peaking profile: {latest['capacity_factor']:.1f}% "
+                        f"capacity factor over {latest['running_hours']:,.0f} hours. "
+                        "Most of the profit comes from the dearest band — set its "
+                        "hours to zero and watch how much of it goes."
+                    )
+                elif latest["capacity_factor"] > 70:
+                    st.success(
+                        f"🌱 A baseload profile: running {latest['capacity_factor']:.1f}% "
+                        "of the year on low marginal cost."
+                    )
 
-                if latest['actual_ror'] < latest['required_ror']:
-                    st.error(f"📉 Investment returns {(latest['actual_ror'] - latest['required_ror'])*100:.1f}% below required rate")
+                if latest["achieved_return"] is None:
+                    st.error("📉 The capital is never repaid at any discount rate.")
+                elif latest["achieved_return"] < latest["required_return"]:
+                    gap = (latest["required_return"] - latest["achieved_return"]) * 100
+                    st.error(f"📉 Returns {gap:.1f} points below the {latest['required_return']*100:.1f}% required.")
                 else:
-                    st.success(f"📈 Investment exceeds required return by {(latest['actual_ror'] - latest['required_ror'])*100:.1f}%")
+                    gap = (latest["achieved_return"] - latest["required_return"]) * 100
+                    st.success(f"📈 Returns {gap:.1f} points above the {latest['required_return']*100:.1f}% required.")
         else:
             st.info("Run investment analysis to see comprehensive results table")
 
     with st.expander("📚 Educational Content"):
         st.markdown("""
         ### Profit and Fixed Cost Recovery (Chapter 2.11)
+        """)
 
+        st.markdown("""
+        **What the plant costs**
+
+        - **CAPEX** is the overnight capital cost — what it costs to build,
+          quoted per kW so plants of different sizes compare. It is paid once,
+          so to set it against a year of revenue it is spread over the plant's
+          life by the **capital recovery factor**, which also earns the
+          investor's required return on the capital still outstanding.
+        - **Fixed O&M** is staff, insurance and scheduled overhauls: paid every
+          year whether the plant generates or not.
+        - **Variable cost** is fuel divided by efficiency, plus variable O&M.
+          This is the plant's **marginal cost**, and it decides when it runs.
+
+        **What the plant earns**
+
+        The price-duration curve says how many hours a year sit at each price.
+        The plant runs only where price exceeds its marginal cost, and only
+        when it is mechanically available. So capacity factor is an *outcome*
+        of the market and the machine, never a number an investor chooses.
+
+        **Why scarcity hours decide everything**
+
+        In every hour it runs, the plant earns price minus marginal cost. That
+        margin is **scarcity rent**, and it is the only thing available to pay
+        back CAPEX and fixed O&M. With the defaults, the 100 scarcity hours are
+        1% of the year and supply about 78% of the long-run profit: a hundred
+        hours at $800/MWh contribute far more than thousands at $45. Set the
+        scarcity band's hours to zero and watch most of the profit disappear.
+
+        **Why outage scheduling is an economic decision**
+
+        Forced outages are random, so they cost hours in every band, scarcity
+        hours included. Planned maintenance is scheduled, so an operator takes
+        it in the cheapest hours — where the plant would not have run anyway.
+        Raise the maintenance days and see how little the profit moves; raise
+        the forced outage rate by the same amount and see how much it does.
+        """)
+
+        st.markdown("""
         **Long-run vs Short-run Profit**:
         - **Long-run Profit**: Revenue minus cost, where cost includes normal rate of return on investment
         - **Short-run Profit**: Revenue minus variable costs (also called "scarcity rent")
