@@ -268,7 +268,7 @@ DEFAULT_BANDS = [
     {"Band": "Off-peak", "Price ($/MWh)": 45.0, "Hours/year": 4000.0},
     {"Band": "Shoulder", "Price ($/MWh)": 85.0, "Hours/year": 3500.0},
     {"Band": "Peak", "Price ($/MWh)": 220.0, "Hours/year": 1160.0},
-    {"Band": "Scarcity", "Price ($/MWh)": 800.0, "Hours/year": 100.0},
+    {"Band": "Scarcity", "Price ($/MWh)": 260.0, "Hours/year": 100.0},
 ]
 
 
@@ -335,7 +335,7 @@ def render() -> None:
 
         st.markdown("**Capital**")
         capex_per_kw = st.number_input(
-            "Overnight capital cost ($/kW)", 100, 6000, 900, 50,
+            "Overnight capital cost ($/kW)", 100, 6000, 1400, 50,
             key="profit_capex",
             help=(
                 f"What it costs to build, per kW, before financing — quoted at "
@@ -399,7 +399,7 @@ def render() -> None:
             )
 
         absorption_mw = st.number_input(
-            "Market absorption limit (MW)", 100, 3000, 2000, 50,
+            "Market absorption limit (MW)", 100, 3000, 1150, 50,
             key="profit_absorption",
             help=(
                 "The most this plant can actually sell in any hour — the room "
@@ -433,6 +433,37 @@ def render() -> None:
                 "Working": (f"{capacity:,.0f} MW built − {metrics['sold_mw']:,.0f} MW "
                             "the market can take"),
                 "Result": f"{metrics['idle_mw']:,.0f} MW idle in every hour",
+            })
+
+        # Maintenance usually costs nothing, which makes the slider look broken
+        # until you can see WHY: it is taken from hours the plant would not have
+        # run in. Showing the revenue forgone turns a dead control into the
+        # lesson it was meant to be.
+        if planned_days > 0:
+            no_outage = investment_metrics(
+                capacity_mw=capacity, life_years=life_years,
+                capex_per_kw=capex_per_kw, wacc=wacc, fom_per_kw=fom_per_kw,
+                fuel_price=fuel_price, efficiency_pct=efficiency_pct, vom=vom,
+                forced_outage_rate=forced_outage_rate, planned_days=0.0,
+                bands=bands, scale_exponent=scale_exponent,
+                absorption_mw=float(absorption_mw),
+            )
+            forgone = no_outage["short_run_profit"] - metrics["short_run_profit"]
+            idle_hours = sum(
+                band["available_hours"] for band in metrics["dispatched"]
+                if band["running_hours"] == 0
+            )
+            scale_rows.append({
+                "Component": "Planned maintenance",
+                "Working": (
+                    f"{planned_days:,.0f} days = {planned_days*24:,.0f} h, taken from "
+                    f"the cheapest hours first ({idle_hours:,.0f} h a year are below "
+                    "marginal cost anyway)"
+                ),
+                "Result": (
+                    "costs no revenue at all" if forgone <= 0 else
+                    f"−${forgone/1e6:,.1f}M of short-run profit"
+                ),
             })
 
         st.dataframe(pd.DataFrame(scale_rows + [
@@ -608,18 +639,24 @@ def render() -> None:
 
         In every hour it runs, the plant earns price minus marginal cost. That
         margin is **scarcity rent**, and it is the only thing available to pay
-        back CAPEX and fixed O&M. With the defaults, the 100 scarcity hours are
-        1% of the year and supply about 78% of the long-run profit: a hundred
-        hours at $800/MWh contribute far more than thousands at $45. Set the
-        scarcity band's hours to zero and watch most of the profit disappear.
+        back CAPEX and fixed O&M. With the defaults the 100 scarcity hours are
+        barely 1% of the year, yet without them **no plant size is viable at
+        all**: a 1,000 MW plant goes from +$4.2M to −$9.8M. A hundred hours a
+        year at $260/MWh decide whether the thing gets built.
 
         **Why outage scheduling is an economic decision**
 
         Forced outages are random, so they cost hours in every band, scarcity
         hours included. Planned maintenance is scheduled, so an operator takes
         it in the cheapest hours — where the plant would not have run anyway.
-        Raise the maintenance days and see how little the profit moves; raise
-        the forced outage rate by the same amount and see how much it does.
+
+        With these defaults that makes the maintenance slider look inert, and it
+        genuinely is: **6,900 hours a year sit below this plant's marginal
+        cost**, so the slider's 90-day maximum (2,160 hours) never reaches an
+        hour the plant would have run in. Maintenance here is free. The build-up
+        table says so explicitly, and the revenue it costs only becomes non-zero
+        past about 288 days. Now move the forced outage rate instead: the same
+        lost hours cost real money, because randomness cannot pick its moment.
 
         **Why plant size has an optimum**
 
@@ -637,24 +674,30 @@ def render() -> None:
         so it cancels out. Worth seeing once: it is the clearest way to
         understand what the two effects actually add.
 
-        **Try this — a plant that is only worth building at one size**
+        **The defaults: a plant only worth building at one size**
 
-        Set CAPEX **1400 $/kW**, the scarcity band to **253 $/MWh** over 100
-        hours, the absorption limit to **1000 MW**, exponent **0.85**, and leave
-        everything else. Then sweep the capacity slider:
+        The page opens on a 400 MW plant that is **not viable** — deliberately.
+        Change nothing but the capacity slider:
 
         | Capacity | Return on capital | |
         |---|---|---|
-        | 400 MW | 5.9% | too small — scale economies have not arrived |
-        | 600 MW | 6.5% | still short of the 7% required |
-        | 800 MW | 7.0% | viable |
-        | 1000 MW | 7.4% | best — exactly at the market's limit |
-        | 1200 MW | 5.2% | 200 MW that can never be sold |
+        | 400 MW | 5.9% | too small — capital too dear per kW |
+        | 750 MW | 7.0% | still short of the 7% required |
+        | 800 MW | 7.1% | viable |
+        | 1,150 MW | 7.7% | best — exactly at the market's limit |
+        | 1,200 MW | 7.2% | viable, but past the limit and falling |
+        | 1,250 MW | 6.7% | too large — capacity nobody can buy |
 
-        Viable only between roughly 800 and 1000 MW. Too small and the capital
-        is too dear per kW; too large and you have built something the market
-        cannot absorb. Neither end is visible in a model where cost per kW is
-        flat and the market is bottomless.
+        Viable only between roughly 800 and 1,200 MW. Below that the fixed parts
+        of the project are spread over too few kW; above it you have built
+        something the market cannot absorb, and every idle megawatt still has to
+        be paid for. Neither end exists in a model where cost per kW is flat and
+        the market is bottomless — which is why sweeping capacity used to change
+        the return on capital not at all.
+
+        Note what the scarcity band is doing here: delete its 100 hours and
+        **no plant size is viable**, at any size on the slider. A hundred hours
+        a year is the difference between an investable project and none.
         """)
 
         st.markdown("""

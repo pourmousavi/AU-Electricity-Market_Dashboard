@@ -327,11 +327,11 @@ def test_an_absorption_limit_above_capacity_changes_nothing() -> None:
     )
 
 
-# The sizing scenario the teaching notes ask a student to type in. Its whole
-# point is that viability has an upper bound as well as a lower one, which the
-# flat-$/kW model could never show: too small and scale economies have not
-# arrived, too large and the extra capacity is unsellable.
-SIZING_SCENARIO = dict(
+# The page's DEFAULTS, which are chosen to teach that plant size has an
+# optimum: too small and scale economies have not arrived, too large and the
+# market cannot absorb the output. EXAMPLE above is the spec's worked example
+# and deliberately differs -- it pins the model, these pin what a student sees.
+DEFAULTS = dict(
     life_years=25, capex_per_kw=1400.0, wacc=0.07, fom_per_kw=25.0,
     fuel_price=9.5, efficiency_pct=33.0, vom=4.0,
     forced_outage_rate=0.08, planned_days=0.0,
@@ -339,34 +339,76 @@ SIZING_SCENARIO = dict(
         {"price": 45.0, "hours": 4000.0},
         {"price": 85.0, "hours": 3500.0},
         {"price": 220.0, "hours": 1160.0},
-        {"price": 253.0, "hours": 100.0},
+        {"price": 260.0, "hours": 100.0},
     ],
-    scale_exponent=0.85, absorption_mw=1000.0,
+    scale_exponent=0.85, absorption_mw=1150.0,
 )
 
 
+def test_the_defaults_match_the_price_bands_the_page_ships() -> None:
+    """A default that drifts from the table silently invalidates the lesson."""
+    from experiments.profit_cost_recovery import DEFAULT_BANDS
+
+    shipped = [{"price": b["Price ($/MWh)"], "hours": b["Hours/year"]}
+               for b in DEFAULT_BANDS]
+    assert shipped == DEFAULTS["bands"]
+
+
 @pytest.mark.parametrize("capacity_mw,expected_return,viable", [
-    (400.0, 5.88, False),
-    (600.0, 6.53, False),
-    (800.0, 7.00, True),
-    (1000.0, 7.38, True),
-    (1200.0, 5.21, False),
+    (400.0, 5.94, False),
+    (750.0, 6.96, False),
+    (800.0, 7.07, True),
+    (1000.0, 7.44, True),
+    (1150.0, 7.68, True),
+    (1200.0, 7.16, True),
+    (1250.0, 6.66, False),
+    (1400.0, 5.32, False),
 ])
-def test_the_sizing_scenario_is_viable_only_between_800_and_1000_mw(
+def test_the_defaults_are_viable_only_between_800_and_1200_mw(
     capacity_mw: float, expected_return: float, viable: bool
 ) -> None:
-    m = investment_metrics(capacity_mw=capacity_mw, **SIZING_SCENARIO)
+    m = investment_metrics(capacity_mw=capacity_mw, **DEFAULTS)
     assert m["achieved_return"] * 100 == pytest.approx(expected_return, abs=0.02)
     assert m["is_viable"] is viable
 
 
-def test_the_sizing_scenario_peaks_at_the_absorption_limit() -> None:
-    """Returns rise to the limit, then fall — the shape is the lesson."""
+def test_the_return_peaks_at_the_absorption_limit() -> None:
+    """Rise then fall -- the shape is the lesson, not any single number."""
     returns = [
-        investment_metrics(capacity_mw=mw, **SIZING_SCENARIO)["achieved_return"]
-        for mw in (400.0, 700.0, 1000.0, 1300.0, 1600.0)
+        investment_metrics(capacity_mw=mw, **DEFAULTS)["achieved_return"]
+        for mw in (400.0, 700.0, 1150.0, 1600.0, 2000.0)
     ]
     peak = returns.index(max(returns))
-    assert peak == 2, "the peak must sit at the 1000 MW absorption limit"
+    assert peak == 2, "the peak must sit at the 1150 MW absorption limit"
     assert returns[:3] == sorted(returns[:3])
     assert returns[2:] == sorted(returns[2:], reverse=True)
+
+
+def test_without_scarcity_hours_no_plant_size_is_viable() -> None:
+    """The scarcity band is what makes any of this work."""
+    no_scarcity = dict(DEFAULTS, bands=DEFAULTS["bands"][:3])
+    for mw in (800.0, 1000.0, 1150.0):
+        assert investment_metrics(capacity_mw=mw, **no_scarcity)["long_run_profit"] < 0
+
+
+# --- Why the maintenance slider so often does nothing ----------------------
+#
+# Maintenance is taken from the cheapest hours first, and with these defaults
+# 6,900 hours a year sit below the plant's marginal cost. The slider's 90-day
+# maximum is 2,160 hours, so it can never reach an hour the plant would have
+# run in. That is the intended lesson -- scheduling maintenance well costs
+# nothing -- but it looks like a broken control, so it is pinned here.
+
+def test_maintenance_inside_the_out_of_merit_hours_is_free() -> None:
+    for days in (26.0, 90.0):
+        m = investment_metrics(**dict(DEFAULTS, capacity_mw=1000.0, planned_days=days))
+        baseline = investment_metrics(**dict(DEFAULTS, capacity_mw=1000.0))
+        assert m["short_run_profit"] == pytest.approx(baseline["short_run_profit"])
+
+
+def test_maintenance_long_enough_to_reach_running_hours_does_cost() -> None:
+    """288 days of out-of-merit hours; past that it eats in-merit ones."""
+    m = investment_metrics(**dict(DEFAULTS, capacity_mw=1000.0, planned_days=300.0))
+    baseline = investment_metrics(**dict(DEFAULTS, capacity_mw=1000.0))
+    assert m["running_hours"] < baseline["running_hours"]
+    assert m["short_run_profit"] < baseline["short_run_profit"]
