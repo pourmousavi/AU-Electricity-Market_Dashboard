@@ -9,6 +9,145 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
+# --- Economics -------------------------------------------------------------
+#
+# Pure functions: numbers in, numbers out, no Streamlit. Everything the page
+# displays is derived here so a student can trace any figure on screen back to
+# an input, and so the model can be tested without rendering anything.
+
+GJ_PER_MWH = 3.6
+HOURS_PER_YEAR = 8760
+
+
+def capital_recovery_factor(rate: float, years: int) -> float:
+    """The fraction of capital that must be repaid each year.
+
+    Turns an up-front CAPEX into the level annual payment that repays it over
+    `years` while earning `rate` on the outstanding balance -- which is what
+    makes an overnight cost comparable with a year of revenue.
+    """
+    if rate == 0:
+        return 1.0 / years
+    growth = (1 + rate) ** years
+    return rate * growth / (growth - 1)
+
+
+def marginal_cost(fuel_price: float, efficiency_pct: float, vom: float) -> float:
+    """Short-run cost of one more MWh, in $/MWh.
+
+    A MWh is 3.6 GJ of energy, so a plant at `efficiency_pct` burns
+    3.6/efficiency GJ of fuel to deliver it.
+    """
+    heat_rate = GJ_PER_MWH / (efficiency_pct / 100)
+    return fuel_price * heat_rate + vom
+
+
+def annual_fixed_cost(capex_per_kw, capacity_mw, wacc, life_years, fom_per_kw) -> dict:
+    """Annualised CAPEX and fixed O&M, each kept separate for display."""
+    capacity_kw = capacity_mw * 1000
+    capex_total = capex_per_kw * capacity_kw
+    crf = capital_recovery_factor(wacc, life_years)
+    annualised_capex = capex_total * crf
+    fixed_om = fom_per_kw * capacity_kw
+    return {
+        "capex_total": capex_total,
+        "crf": crf,
+        "annualised_capex": annualised_capex,
+        "fixed_om": fixed_om,
+        "total": annualised_capex + fixed_om,
+    }
+
+
+def dispatch(bands, marginal_cost_value, forced_outage_rate, planned_days) -> list:
+    """Hours per price band after outages, and which of them are in merit.
+
+    The two kinds of unavailability behave differently, and the difference is
+    worth seeing:
+
+    * Forced outages are random, so they scale every band down equally.
+    * Planned maintenance is scheduled, so an operator takes it in the
+      cheapest hours first -- which is why maintenance costs a peaker almost
+      no revenue, and why outage scheduling is an economic decision.
+    """
+    available = [band["hours"] * (1 - forced_outage_rate) for band in bands]
+
+    remaining = planned_days * 24
+    for index in sorted(range(len(bands)), key=lambda i: bands[i]["price"]):
+        if remaining <= 0:
+            break
+        taken = min(available[index], remaining)
+        available[index] -= taken
+        remaining -= taken
+
+    return [
+        {
+            "price": band["price"],
+            "hours": band["hours"],
+            "available_hours": hours,
+            "running_hours": hours if band["price"] > marginal_cost_value else 0.0,
+        }
+        for band, hours in zip(bands, available)
+    ]
+
+
+def achieved_return(capex_total: float, annual_cash_flow: float,
+                    life_years: int) -> float | None:
+    """The return the capital actually earns, or None if it never repays.
+
+    For a flat annual cash flow this is exact: find the rate whose recovery
+    factor turns this CAPEX into exactly this cash flow. Bisection, because
+    the closed form does not exist and the factor rises monotonically in rate.
+    """
+    if capex_total <= 0 or annual_cash_flow <= 0:
+        return None
+    if annual_cash_flow * life_years <= capex_total:
+        return None  # does not even return the capital, let alone a profit
+
+    low, high = 0.0, 10.0
+    for _ in range(200):
+        mid = (low + high) / 2
+        if capital_recovery_factor(mid, life_years) * capex_total < annual_cash_flow:
+            low = mid
+        else:
+            high = mid
+    return (low + high) / 2
+
+
+def investment_metrics(capacity_mw, life_years, capex_per_kw, wacc, fom_per_kw,
+                       fuel_price, efficiency_pct, vom, forced_outage_rate,
+                       planned_days, bands) -> dict:
+    """Everything the page displays, from what the student typed."""
+    mc = marginal_cost(fuel_price, efficiency_pct, vom)
+    fixed = annual_fixed_cost(capex_per_kw, capacity_mw, wacc, life_years, fom_per_kw)
+    dispatched = dispatch(bands, mc, forced_outage_rate, planned_days)
+
+    running_hours = sum(band["running_hours"] for band in dispatched)
+    energy = capacity_mw * running_hours
+    revenue = sum(band["price"] * capacity_mw * band["running_hours"]
+                  for band in dispatched)
+    variable_cost = mc * energy
+    short_run_profit = revenue - variable_cost
+    long_run_profit = short_run_profit - fixed["total"]
+
+    return {
+        "marginal_cost": mc,
+        "fixed": fixed,
+        "dispatched": dispatched,
+        "running_hours": running_hours,
+        "energy": energy,
+        "revenue": revenue,
+        "variable_cost": variable_cost,
+        "short_run_profit": short_run_profit,
+        "long_run_profit": long_run_profit,
+        "capacity_factor": 100 * energy / (capacity_mw * HOURS_PER_YEAR),
+        "required_return": wacc,
+        "achieved_return": achieved_return(
+            fixed["capex_total"], short_run_profit - fixed["fixed_om"], life_years
+        ),
+        "is_viable": long_run_profit >= 0,
+    }
+
+
 def calculate_investment_metrics(capacity, marginal_cost, fixed_cost_annual, required_ror, capacity_factor_input):
     """Calculate investment viability metrics with user-defined capacity factor"""
     # Use input capacity factor to determine operating hours
