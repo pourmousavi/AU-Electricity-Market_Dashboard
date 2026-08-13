@@ -2,6 +2,8 @@
 
 Extracted from week3_pricing_market_power.py (profit_cost_recovery_section) on 2026-08-12."""
 
+import math
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -97,6 +99,8 @@ def achieved_return(capex_total: float, annual_cash_flow: float,
     factor turns this CAPEX into exactly this cash flow. Bisection, because
     the closed form does not exist and the factor rises monotonically in rate.
     """
+    if not math.isfinite(capex_total) or not math.isfinite(annual_cash_flow):
+        return None  # defence in depth: a non-finite input must never reach bisection
     if capex_total <= 0 or annual_cash_flow <= 0:
         return None
     if annual_cash_flow * life_years <= capex_total:
@@ -236,11 +240,34 @@ DEFAULT_BANDS = [
 
 
 def _price_bands(edited) -> list:
-    """The edited price-duration table as the model wants it."""
-    return [
-        {"price": float(row["Price ($/MWh)"]), "hours": float(row["Hours/year"])}
-        for row in edited.to_dict("records")
-    ]
+    """The edited price-duration table as the model wants it.
+
+    Clearing a cell in the `st.data_editor` turns it into NaN. NaN must never
+    reach the model -- it propagates through revenue and cash flow until
+    `achieved_return`'s guards, which all compare against NaN and are False,
+    let bisection run and `capital_recovery_factor` divide by zero. So any
+    non-finite cell is read as 0.0 here instead.
+    """
+    bands = []
+    for row in edited.to_dict("records"):
+        price = float(row["Price ($/MWh)"])
+        hours = float(row["Hours/year"])
+        bands.append({
+            "price": price if math.isfinite(price) else 0.0,
+            "hours": hours if math.isfinite(hours) else 0.0,
+        })
+    return bands
+
+
+def _blank_band_cells(edited) -> list:
+    """Which (band, column) cells are non-finite and will be read as zero."""
+    blanks = []
+    for row in edited.to_dict("records"):
+        label = row.get("Band", "row")
+        for column in ("Price ($/MWh)", "Hours/year"):
+            if not math.isfinite(float(row[column])):
+                blanks.append(f"{label} — {column}")
+    return blanks
 
 
 def render() -> None:
@@ -311,6 +338,11 @@ def render() -> None:
             pd.DataFrame(DEFAULT_BANDS), key="profit_bands",
             num_rows="fixed", use_container_width=True,
         )
+        blanks = _blank_band_cells(edited)
+        if blanks:
+            st.warning(
+                "Blank cells are being read as zero: " + "; ".join(blanks) + "."
+            )
         bands = _price_bands(edited)
 
         total_band_hours = sum(band["hours"] for band in bands)

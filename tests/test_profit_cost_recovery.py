@@ -3,9 +3,11 @@
 Every figure here is hand-checked against the worked example in
 docs/superpowers/specs/2026-08-13-profit-cost-recovery-economics-design.md.
 """
+import pandas as pd
 import pytest
 
 from experiments.profit_cost_recovery import (
+    _price_bands,
     achieved_return,
     annual_fixed_cost,
     capital_recovery_factor,
@@ -75,6 +77,30 @@ def test_planned_maintenance_spills_into_the_next_cheapest_band() -> None:
     assert result[1]["available_hours"] == pytest.approx(3500 * 0.92 - (4800 - 3680))
 
 
+def test_price_bands_coerces_a_nan_price_to_zero() -> None:
+    """A cleared Price cell in st.data_editor becomes NaN; it must read as 0."""
+    edited = pd.DataFrame([
+        {"Band": "Off-peak", "Price ($/MWh)": float("nan"), "Hours/year": 4000.0},
+        {"Band": "Peak", "Price ($/MWh)": 220.0, "Hours/year": 1160.0},
+    ])
+    assert _price_bands(edited) == [
+        {"price": 0.0, "hours": 4000.0},
+        {"price": 220.0, "hours": 1160.0},
+    ]
+
+
+def test_price_bands_coerces_a_nan_hours_to_zero() -> None:
+    """A cleared Hours cell in st.data_editor becomes NaN; it must read as 0."""
+    edited = pd.DataFrame([
+        {"Band": "Off-peak", "Price ($/MWh)": 45.0, "Hours/year": float("nan")},
+        {"Band": "Peak", "Price ($/MWh)": 220.0, "Hours/year": 1160.0},
+    ])
+    assert _price_bands(edited) == [
+        {"price": 45.0, "hours": 0.0},
+        {"price": 220.0, "hours": 1160.0},
+    ]
+
+
 def test_a_plant_runs_only_where_price_exceeds_its_marginal_cost() -> None:
     result = dispatch(BANDS, marginal_cost_value=107.6,
                       forced_outage_rate=0.08, planned_days=0.0)
@@ -93,6 +119,23 @@ def test_achieved_return_round_trips_through_the_recovery_factor() -> None:
 def test_achieved_return_is_none_when_capital_is_never_recovered() -> None:
     """$1M a year for 25 years does not repay $360M, at any discount rate."""
     assert achieved_return(360_000_000, 1_000_000, 25) is None
+
+
+def test_achieved_return_is_none_for_a_non_finite_cash_flow() -> None:
+    """A NaN or infinite cash flow must never reach bisection.
+
+    Bisection with a NaN comparison leaves every guard False, `high` halves
+    toward 0, and `capital_recovery_factor` then divides by zero -- this is
+    the defence-in-depth guard against that, independent of what any caller
+    upstream (e.g. `_price_bands`) already coerced.
+    """
+    assert achieved_return(360_000_000, float("nan"), 25) is None
+    assert achieved_return(360_000_000, float("inf"), 25) is None
+
+
+def test_achieved_return_is_none_for_a_non_finite_capex() -> None:
+    assert achieved_return(float("nan"), 60_000_000, 25) is None
+    assert achieved_return(float("inf"), 60_000_000, 25) is None
 
 
 def test_the_worked_example_end_to_end() -> None:
@@ -147,3 +190,5 @@ def test_the_waterfall_adds_up_to_long_run_profit() -> None:
     assert revenue + less_variable + less_capex + less_fom == pytest.approx(
         m["long_run_profit"] / 1e6
     )
+
+
