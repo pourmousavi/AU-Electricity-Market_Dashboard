@@ -122,22 +122,49 @@ def main(check_only: bool) -> None:
     captured = capture()
     current = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else {}
 
+    # Compare the FULL recorded entry (text and counts), not just text. A
+    # counts-only change -- e.g. a widget disappearing without touching any
+    # rendered string -- is still a change to what gets written, and must be
+    # visible here or --check gives a false "nothing to see" while accept
+    # bakes it in anyway.
     changed = sorted(
         key for key in captured
-        if current.get(key, {}).get("text") != captured[key]["text"]
+        if current.get(key, {}) != captured[key]
     )
     if not changed:
         print(f"no change: all {len(captured)} experiments match the baseline")
         return
 
     for key in changed:
-        before = set(current.get(key, {}).get("text", []))
-        after = set(captured[key]["text"])
-        print(f"\n{key}: -{len(before - after)} +{len(after - before)}")
-        for text in sorted(before - after)[:3]:
-            print(f"  - {text[:90]}")
-        for text in sorted(after - before)[:3]:
-            print(f"  + {text[:90]}")
+        before_entry = current.get(key, {})
+        after_entry = captured[key]
+        before_text = set(before_entry.get("text", []))
+        after_text = set(after_entry.get("text", []))
+        text_changed = before_text != after_text
+
+        before_counts = before_entry.get("counts", {})
+        after_counts = after_entry.get("counts", {})
+        moved_counts = sorted(
+            k for k in set(before_counts) | set(after_counts)
+            if before_counts.get(k) != after_counts.get(k)
+        )
+
+        if text_changed:
+            kind = "text+counts" if moved_counts else "text"
+            print(f"\n{key} [{kind}]: -{len(before_text - after_text)} +{len(after_text - before_text)}")
+            for text in sorted(before_text - after_text)[:3]:
+                print(f"  - {text[:90]}")
+            for text in sorted(after_text - before_text)[:3]:
+                print(f"  + {text[:90]}")
+            for count_key in moved_counts:
+                print(f"  counts.{count_key}: {before_counts.get(count_key)} -> {after_counts.get(count_key)}")
+        else:
+            # Text is byte-identical; only element counts moved. Report what
+            # moved and between what values so this is distinguishable at a
+            # glance from a real content change.
+            print(f"\n{key} [counts-only]:")
+            for count_key in moved_counts:
+                print(f"  counts.{count_key}: {before_counts.get(count_key)} -> {after_counts.get(count_key)}")
 
     if check_only:
         print(f"\n--check: {len(changed)} experiment(s) would be rewritten")
