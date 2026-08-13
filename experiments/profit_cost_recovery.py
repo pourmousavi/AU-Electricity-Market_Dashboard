@@ -148,54 +148,6 @@ def investment_metrics(capacity_mw, life_years, capex_per_kw, wacc, fom_per_kw,
     }
 
 
-def calculate_investment_metrics(capacity, marginal_cost, fixed_cost_annual, required_ror, capacity_factor_input):
-    """Calculate investment viability metrics with user-defined capacity factor"""
-    # Use input capacity factor to determine operating hours
-    total_hours = int(8760 * capacity_factor_input / 100)
-    
-    # Market scenarios - simplified to use capacity factor
-    # Assume average market price based on marginal cost and scarcity conditions
-    if marginal_cost <= 50:
-        avg_market_price = 75  # Base load operation
-    elif marginal_cost <= 150:
-        avg_market_price = 180  # Mid-merit operation
-    else:
-        avg_market_price = 500  # Peaking operation with high scarcity pricing
-    
-    # Calculate revenue only when market price > marginal cost
-    if avg_market_price > marginal_cost:
-        total_revenue = capacity * avg_market_price * total_hours
-        total_variable_cost = marginal_cost * capacity * total_hours
-    else:
-        total_revenue = 0
-        total_variable_cost = 0
-        total_hours = 0
-    
-    short_run_profit = total_revenue - total_variable_cost
-    total_annual_cost = fixed_cost_annual * (1 + required_ror)  # Include required return
-    long_run_profit = short_run_profit - total_annual_cost
-    
-    # Calculate actual rate of return achieved
-    if fixed_cost_annual > 0:
-        actual_ror = (short_run_profit - fixed_cost_annual) / fixed_cost_annual
-    else:
-        actual_ror = 0
-    
-    is_viable = long_run_profit >= 0
-    
-    return {
-        'total_revenue': total_revenue,
-        'total_variable_cost': total_variable_cost,
-        'short_run_profit': short_run_profit,
-        'long_run_profit': long_run_profit,
-        'capacity_factor': capacity_factor_input,  # Use input value
-        'actual_ror': actual_ror,
-        'required_ror': required_ror,
-        'is_viable': is_viable,
-        'total_hours': total_hours,
-        'avg_market_price': avg_market_price
-    }
-
 def create_profit_analysis_plot(analysis_points):
     """Create profit and cost recovery analysis plot"""
     fig = make_subplots(
@@ -283,6 +235,22 @@ def create_profit_analysis_plot(analysis_points):
     
     return fig
 
+DEFAULT_BANDS = [
+    {"Band": "Off-peak", "Price ($/MWh)": 45.0, "Hours/year": 4000.0},
+    {"Band": "Shoulder", "Price ($/MWh)": 85.0, "Hours/year": 3500.0},
+    {"Band": "Peak", "Price ($/MWh)": 220.0, "Hours/year": 1160.0},
+    {"Band": "Scarcity", "Price ($/MWh)": 800.0, "Hours/year": 100.0},
+]
+
+
+def _price_bands(edited) -> list:
+    """The edited price-duration table as the model wants it."""
+    return [
+        {"price": float(row["Price ($/MWh)"]), "hours": float(row["Hours/year"])}
+        for row in edited.to_dict("records")
+    ]
+
+
 def render() -> None:
     # Initialize session state for all tools
     if 'pricing_analysis_data' not in st.session_state:
@@ -308,34 +276,91 @@ def render() -> None:
     with col1:
         st.subheader("Investment Parameters")
 
-        # Investment inputs - enhanced range and capacity factor input
-        capacity = st.slider("Plant Capacity (MW)", 100, 1000, 400, 50)
+        st.markdown("**Plant**")
+        capacity = st.slider("Capacity (MW)", 100, 1000, 400, 50, key="profit_capacity")
+        life_years = st.slider("Technical life (years)", 10, 40, 25, 5,
+                               key="profit_life")
 
-        marginal_cost = st.number_input(
-            "Marginal Cost ($/MWh)", 
-            min_value=0,
-            max_value=1000,
-            value=45,
-            step=5,
-            help="Can go up to $1000/MWh for emergency peaking units"
+        st.markdown("**Capital**")
+        capex_per_kw = st.number_input(
+            "Overnight capital cost ($/kW)", 100, 6000, 900, 50,
+            key="profit_capex",
+            help="What it costs to build, per kW of capacity, before financing.",
+        )
+        wacc = st.slider("WACC — required return (%)", 3.0, 15.0, 7.0, 0.5,
+                         key="profit_wacc") / 100
+
+        st.markdown("**Operating cost**")
+        fom_per_kw = st.number_input("Fixed O&M ($/kW/year)", 0, 200, 25, 5,
+                                     key="profit_fom",
+                                     help="Staff, insurance, overhauls — paid whether or not the plant runs.")
+        fuel_price = st.number_input("Fuel price ($/GJ)", 0.0, 40.0, 9.5, 0.5,
+                                     key="profit_fuel")
+        efficiency_pct = st.slider("Thermal efficiency (%)", 20.0, 62.0, 33.0, 1.0,
+                                   key="profit_eff",
+                                   help="Higher efficiency means less fuel per MWh.")
+        vom = st.number_input("Variable O&M ($/MWh)", 0.0, 30.0, 4.0, 0.5,
+                              key="profit_vom")
+
+        st.markdown("**Availability**")
+        forced_outage_rate = st.slider("Forced outage rate (%)", 0.0, 30.0, 8.0, 1.0,
+                                       key="profit_for",
+                                       help="Unplanned breakdowns. Random, so they cost hours in every price band.") / 100
+        planned_days = st.slider("Planned maintenance (days/year)", 0, 90, 0, 7,
+                                 key="profit_planned",
+                                 help="Scheduled, so it is taken in the cheapest hours first.")
+
+        st.markdown("**Market prices**")
+        st.caption(
+            "The price-duration curve: how many hours a year sit at each price. "
+            "The plant runs only where the price beats its marginal cost."
+        )
+        edited = st.data_editor(
+            pd.DataFrame(DEFAULT_BANDS), key="profit_bands",
+            num_rows="fixed", use_container_width=True,
+        )
+        bands = _price_bands(edited)
+
+        total_band_hours = sum(band["hours"] for band in bands)
+        if abs(total_band_hours - 8760) > 1:
+            st.warning(
+                f"The bands cover {total_band_hours:,.0f} hours; a year is 8,760. "
+                "Results are still shown, but the capacity factor will not mean much."
+            )
+
+        metrics = investment_metrics(
+            capacity_mw=capacity, life_years=life_years,
+            capex_per_kw=capex_per_kw, wacc=wacc, fom_per_kw=fom_per_kw,
+            fuel_price=fuel_price, efficiency_pct=efficiency_pct, vom=vom,
+            forced_outage_rate=forced_outage_rate, planned_days=planned_days,
+            bands=bands,
         )
 
-        fixed_cost_annual = st.number_input("Annual Fixed Cost ($M)", 10, 500, 80, 10) * 1_000_000
-
-        required_ror = st.slider("Required Rate of Return (%)", 5.0, 15.0, 8.0, 0.5) / 100
-
-        # Capacity factor as input
-        capacity_factor_input = st.slider(
-            "Expected Capacity Factor (%)",
-            min_value=5.0,
-            max_value=95.0,
-            value=40.0,
-            step=5.0,
-            help="Percentage of time plant operates annually (input parameter)"
-        )
-
-        # Calculate metrics with input capacity factor
-        metrics = calculate_investment_metrics(capacity, marginal_cost, fixed_cost_annual, required_ror, capacity_factor_input)
+        st.markdown("**Where the numbers come from**")
+        fixed = metrics["fixed"]
+        st.dataframe(pd.DataFrame([
+            {"Component": "Overnight CAPEX",
+             "Working": f"{capex_per_kw:,.0f} $/kW × {capacity:,.0f} MW",
+             "Result": f"${fixed['capex_total']/1e6:,.1f}M"},
+            {"Component": "Capital recovery factor",
+             "Working": f"{wacc*100:.1f}% over {life_years} years",
+             "Result": f"{fixed['crf']:.4f}"},
+            {"Component": "Annualised CAPEX",
+             "Working": f"${fixed['capex_total']/1e6:,.1f}M × {fixed['crf']:.4f}",
+             "Result": f"${fixed['annualised_capex']/1e6:,.1f}M/yr"},
+            {"Component": "Fixed O&M",
+             "Working": f"{fom_per_kw:,.0f} $/kW/yr × {capacity:,.0f} MW",
+             "Result": f"${fixed['fixed_om']/1e6:,.1f}M/yr"},
+            {"Component": "Annual fixed cost",
+             "Working": "annualised CAPEX + fixed O&M",
+             "Result": f"${fixed['total']/1e6:,.1f}M/yr"},
+            {"Component": "Fuel cost",
+             "Working": f"{fuel_price:,.2f} $/GJ ÷ {efficiency_pct:.0f}% efficiency",
+             "Result": f"${fuel_price * 3.6 / (efficiency_pct/100):,.1f}/MWh"},
+            {"Component": "Marginal cost",
+             "Working": f"fuel + {vom:,.1f} $/MWh variable O&M",
+             "Result": f"${metrics['marginal_cost']:,.1f}/MWh"},
+        ]), use_container_width=True, hide_index=True)
 
         # Create plot
         fig = create_profit_analysis_plot(st.session_state.profit_analysis_data)
@@ -375,12 +400,21 @@ def render() -> None:
 
         # Current scenario metrics
         st.subheader("Current Scenario")
-        st.metric("Investment Viability", 
-                 "✅ VIABLE" if metrics['is_viable'] else "❌ NOT VIABLE")
-        st.metric("Capacity Factor", f"{metrics['capacity_factor']:.1f}%")
-        st.metric("Required Rate of Return", f"{metrics['required_ror']*100:.1f}%")
-        st.metric("Actual Rate of Return", f"{metrics['actual_ror']*100:.1f}%")
-        st.metric("Long-run Profit", f"${metrics['long_run_profit']/1_000_000:.1f}M")
+        st.metric("Investment Viability",
+                  "✅ VIABLE" if metrics["is_viable"] else "❌ NOT VIABLE")
+        st.metric("Marginal cost", f"${metrics['marginal_cost']:,.1f}/MWh")
+        st.metric("Annual fixed cost", f"${metrics['fixed']['total']/1e6:,.1f}M")
+        st.metric("Capacity factor (derived)", f"{metrics['capacity_factor']:.1f}%",
+                  help="An outcome, not a setting: the hours this plant is both available and in merit.")
+        st.metric("Short-run profit", f"${metrics['short_run_profit']/1e6:,.1f}M",
+                  help="Revenue less variable cost — the scarcity rent available to cover fixed costs.")
+        st.metric("Long-run profit", f"${metrics['long_run_profit']/1e6:,.1f}M")
+        achieved = metrics["achieved_return"]
+        st.metric(
+            "Return on capital",
+            "never repays" if achieved is None else f"{achieved*100:.1f}%",
+            help=f"Against {metrics['required_return']*100:.1f}% required.",
+        )
 
         # Results summary table
         if st.session_state.profit_analysis_data:
