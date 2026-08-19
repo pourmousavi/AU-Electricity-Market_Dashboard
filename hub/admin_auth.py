@@ -65,8 +65,22 @@ def require_admin(state: MutableMapping | None = None) -> bool:
         st.error(f"Too many attempts. Try again in {remaining // 60 + 1} minute(s).")
         return False
 
-    supplied = st.text_input("Password", type="password", key="_hub.admin_pw")
-    if not st.button("Sign in", key="_hub.admin_signin"):
+    # A form, not a bare text_input + button: outside a form the password is
+    # only sent to the server once the field commits (blur or Enter), so a
+    # browser autofill -- which fills the DOM without the keystrokes Streamlit
+    # listens for -- or a click landing before the commit submits an empty
+    # password and reads back as "incorrect". A form submits the field's
+    # current value with the click, every time, and makes Enter work.
+    with st.form("_hub.admin_form"):
+        supplied = st.text_input("Password", type="password", key="_hub.admin_pw")
+        submitted = st.form_submit_button("Sign in")
+    if not submitted:
+        return False
+
+    # An empty box is a slip, not a guess: counting it would spend the
+    # lockout budget on attempts that never tried a password.
+    if not supplied:
+        st.error("Enter the password.")
         return False
 
     time.sleep(ATTEMPT_DELAY_SECONDS)

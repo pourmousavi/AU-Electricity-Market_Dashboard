@@ -1,3 +1,7 @@
+from pathlib import Path
+
+from streamlit.testing.v1 import AppTest
+
 from hub import admin_auth
 
 
@@ -43,3 +47,44 @@ def test_clear_failures_resets_lockout() -> None:
         admin_auth.register_failure(state, now=100.0 + i)
     admin_auth.clear_failures(state)
     assert admin_auth.lockout_remaining(state, now=105.0) == 0
+
+
+# --- The gate, driven the way a coordinator drives it ----------------------
+#
+# The helpers above are pure and easy; the failure that actually locked the
+# coordinator out was in the wiring -- the typed password not reaching the
+# server with the click. Only a real run through streamlit's widget plumbing
+# can catch that, so these two go through AppTest.
+
+ROOT = Path(__file__).resolve().parent.parent
+
+GATE = (
+    "import sys\n"
+    f"sys.path.insert(0, {str(ROOT)!r})\n"
+    "import streamlit as st\n"
+    "from hub import admin_auth\n"
+    "st.write('AUTHED' if admin_auth.require_admin() else 'LOCKED')\n"
+)
+
+
+def _gate() -> AppTest:
+    app = AppTest.from_string(GATE, default_timeout=30)
+    app.secrets["admin"] = {"password": "hunter2"}
+    return app
+
+
+def test_typed_password_reaches_the_check_with_the_submit() -> None:
+    """Type, then submit: the value typed must be the value checked."""
+    app = _gate().run()
+    app.text_input[0].input("hunter2").run()
+    app.button[0].click().run()
+    assert not app.exception
+    assert "AUTHED" in [m.value for m in app.markdown]
+
+
+def test_submitting_an_empty_box_does_not_spend_an_attempt() -> None:
+    """Autofill and stray clicks arrive empty; they must not burn the lockout."""
+    app = _gate().run()
+    app.button[0].click().run()
+    assert "LOCKED" in [m.value for m in app.markdown]
+    assert admin_auth.FAILURES_KEY not in app.session_state
