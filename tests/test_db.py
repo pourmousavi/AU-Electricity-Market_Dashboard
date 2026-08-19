@@ -35,7 +35,7 @@ def test_seed_parks_every_experiment_in_one_disabled_topic(engine) -> None:
     assert topics[0]["enabled"] is False
 
     rows = db.list_experiments(engine, topic_id=None, include_disabled=True)
-    assert len(rows) == 25
+    assert len(rows) == 26
     assert not any(r["enabled"] for r in rows)
     assert all(r["topic_id"] == topics[0]["id"] for r in rows)
 
@@ -140,6 +140,6 @@ def test_seed_does_not_rerun_when_topics_deleted_but_experiments_remain(engine) 
         db.delete_topic(engine, t["id"])
 
     assert db.list_topics(engine, include_disabled=True) == []
-    assert len(db.list_experiments(engine, topic_id=None, include_disabled=True)) == 25
+    assert len(db.list_experiments(engine, topic_id=None, include_disabled=True)) == 26
 
     assert db.seed_initial(engine, cat) is False

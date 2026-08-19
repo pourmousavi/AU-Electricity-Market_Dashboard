@@ -27,7 +27,7 @@ def _harness(exp_id: str) -> str:
 
 
 def test_catalogue_has_expected_size() -> None:
-    assert len(ALL_IDS) == 25
+    assert len(ALL_IDS) == 26
 
 
 @pytest.mark.parametrize("exp_id", ALL_IDS)
@@ -54,7 +54,7 @@ def test_experiment_produces_output(exp_id: str) -> None:
 # mode of the fourteen experiments carved out of a shared tabbed dashboard:
 # the wrong sibling's body being wired up, or a shared experiments/_kit page
 # rendering a sibling's content alongside (or instead of) the experiment's
-# own. A parametrize loop over 25 independent `AppTest` runs has no way to
+# own. A parametrize loop over 26 independent `AppTest` runs has no way to
 # notice that on its own — each run only sees one experiment's output, with
 # nothing to compare it to.
 #
@@ -186,10 +186,10 @@ def test_state_groups_have_the_expected_members() -> None:
 
 
 def test_ungrouped_experiments_declare_no_state_group() -> None:
-    """The other 11 are their own group — they must not join one by accident."""
+    """The other 12 are their own group, they must not join one by accident."""
     grouped = {exp_id for ids in EXPECTED_GROUPS.values() for exp_id in ids}
     ungrouped = sorted(set(CATALOGUE) - grouped)
-    assert len(ungrouped) == 11, ungrouped
+    assert len(ungrouped) == 12, ungrouped
     for exp_id in ungrouped:
         module = importlib.import_module(f"experiments.{exp_id}")
         assert not hasattr(module, "STATE_GROUP"), (
