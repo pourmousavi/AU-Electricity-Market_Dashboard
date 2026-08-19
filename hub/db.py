@@ -69,8 +69,18 @@ def bootstrap(engine: Engine) -> None:
     metadata.create_all(engine)
 
 
+# An id is a lower-case module name, so `.title()` alone turns every acronym in
+# one into a word: "Lp Vertex Walk", "Dc Opf Results". These stay upper-case.
+# The title is only a starting point either way, editable per experiment in the
+# admin panel, and reconcile never rewrites one that already exists.
+ACRONYMS = frozenset({"lp", "dc", "opf"})
+
+
 def _default_title(experiment_id: str) -> str:
-    return experiment_id.replace("_", " ").title()
+    return " ".join(
+        word.upper() if word in ACRONYMS else word.title()
+        for word in experiment_id.split("_")
+    )
 
 
 def seed_initial(engine: Engine, catalogue: dict[str, Experiment]) -> bool:

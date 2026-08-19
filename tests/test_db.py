@@ -143,3 +143,16 @@ def test_seed_does_not_rerun_when_topics_deleted_but_experiments_remain(engine) 
     assert len(db.list_experiments(engine, topic_id=None, include_disabled=True)) == 26
 
     assert db.seed_initial(engine, cat) is False
+
+
+def test_default_titles_keep_acronyms_upper_case() -> None:
+    """The generated title is what a new experiment is first listed under.
+
+    `.title()` on an id reads every acronym in it as an ordinary word, which
+    puts "Lp Vertex Walk" and "Dc Opf Results" in front of the coordinator.
+    """
+    assert db._default_title("lp_vertex_walk") == "LP Vertex Walk"
+    assert db._default_title("dc_opf_results") == "DC OPF Results"
+    assert db._default_title("auction_vs_dc_opf") == "Auction Vs DC OPF"
+    assert db._default_title("market_equilibrium") == "Market Equilibrium"
+    assert db._default_title("nonlinear_optimisation_3d") == "Nonlinear Optimisation 3D"
