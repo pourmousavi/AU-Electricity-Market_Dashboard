@@ -177,3 +177,32 @@ def test_delete_topic_proceeds_once_the_confirmation_is_ticked(
     assert _render_content(engine) is True
 
     assert _topic_count(engine) == before - 1
+
+
+@pytest.mark.parametrize(
+    "topic_id, orphaned, expected",
+    [
+        (1, False, "Pool Pricing · pool_pricing :blue-badge[Topic 3]"),
+        (None, False, "Pool Pricing · pool_pricing :grey-badge[unassigned]"),
+        # A topic that was deleted out from under the experiment reads the
+        # same as never having been assigned -- both mean no student sees it.
+        (99, False, "Pool Pricing · pool_pricing :grey-badge[unassigned]"),
+        (1, True, "Pool Pricing · pool_pricing :blue-badge[Topic 3] ⚠️ orphaned"),
+    ],
+)
+def test_experiment_label_badges_the_topic(topic_id, orphaned, expected):
+    choices = {None: "— unassigned —", 1: " Topic 3"}
+    row = {
+        "experiment_id": "pool_pricing", "title": "Pool Pricing",
+        "topic_id": topic_id, "orphaned": orphaned,
+    }
+    assert admin.experiment_label(row, choices) == expected
+
+
+def test_experiment_label_neutralises_brackets_in_a_topic_name():
+    """Badge syntax is bracket-delimited; a stray ] would truncate the badge."""
+    row = {
+        "experiment_id": "x", "title": "X", "topic_id": 1, "orphaned": False,
+    }
+    label = admin.experiment_label(row, {None: "—", 1: "Topic [3]"})
+    assert label == "X · x :blue-badge[Topic (3)]"

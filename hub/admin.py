@@ -89,6 +89,25 @@ def _render_usage(engine) -> None:
     )
 
 
+def experiment_label(row: dict, topic_choices: dict) -> str:
+    """Accordion title: title, id, and a badge for where the experiment sits.
+
+    The badge is the only place an admin can see an experiment's topic without
+    opening it, so it also has to be honest about the two ways one reaches
+    nobody: unassigned, or assigned to a topic that no longer exists.
+    """
+    topic_id = row["topic_id"] if row["topic_id"] in topic_choices else None
+    if topic_id is None:
+        badge = ":grey-badge[unassigned]"
+    else:
+        # Topic names are free text and badge syntax is bracket-delimited, so
+        # a name containing a bracket would end the badge early.
+        name = topic_choices[topic_id].strip().replace("[", "(").replace("]", ")")
+        badge = f":blue-badge[{name}]"
+    flag = " ⚠️ orphaned" if row["orphaned"] else ""
+    return f"{row['title']} · {row['experiment_id']} {badge}{flag}"
+
+
 def _render_content(engine, catalogue) -> None:
     st.subheader("Topics")
     topics = db.list_topics(engine, include_disabled=True)
@@ -166,9 +185,8 @@ def _render_content(engine, catalogue) -> None:
 
     for row in db.list_experiments(engine, topic_id=None, include_disabled=True):
         exp_id = row["experiment_id"]
-        flag = " ⚠️ orphaned" if row["orphaned"] else ""
         with st.expander(
-            f"{row['title']} · {exp_id}{flag}", expanded=False,
+            experiment_label(row, topic_choices), expanded=False,
             key=f"_hub.eexp_{exp_id}",
         ):
             if row["orphaned"]:
