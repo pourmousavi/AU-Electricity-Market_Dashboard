@@ -206,3 +206,43 @@ def test_experiment_label_neutralises_brackets_in_a_topic_name():
     }
     label = admin.experiment_label(row, {None: "—", 1: "Topic [3]"})
     assert label == "X · x :blue-badge[Topic (3)]"
+
+
+def test_topic_label_chips_every_experiment_by_visibility() -> None:
+    topic = {"name": "Topic 3", "subtitle": "LP formulation"}
+    experiments = [
+        {"title": "Tools", "enabled": True, "orphaned": False},
+        {"title": "Nonlinear 3D", "enabled": False, "orphaned": False},
+    ]
+    assert admin.topic_label(topic, experiments) == (
+        "Topic 3 :green-badge[Tools] :grey-badge[Nonlinear 3D] — LP formulation"
+    )
+
+
+def test_topic_label_calls_out_a_topic_holding_nothing() -> None:
+    """An empty topic is invisible to students however open it is."""
+    label = admin.topic_label({"name": "Topic 4", "subtitle": "Duality"}, [])
+    assert label == "Topic 4 :red-badge[no experiments] — Duality"
+
+
+def test_visibility_toggle_writes_without_waiting_for_save(engine) -> None:
+    """The toggle is the action; a forgotten Save must not leave it live."""
+    key = "_hub.ee_market_power"
+    st.session_state[key] = False
+    try:
+        admin.apply_experiment_visibility(engine, "market_power", key)
+    finally:
+        st.session_state.pop(key, None)
+    assert db.get_experiment(engine, "market_power")["enabled"] is False
+
+
+def test_topic_visibility_toggle_writes_without_waiting_for_save(engine) -> None:
+    topic_id = db.list_topics(engine, include_disabled=True)[0]["id"]
+    key = f"_hub.te_{topic_id}"
+    st.session_state[key] = False
+    try:
+        admin.apply_topic_visibility(engine, topic_id, key)
+    finally:
+        st.session_state.pop(key, None)
+    topics = {t["id"]: t for t in db.list_topics(engine, include_disabled=True)}
+    assert topics[topic_id]["enabled"] is False

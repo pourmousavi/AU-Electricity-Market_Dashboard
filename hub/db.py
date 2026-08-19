@@ -209,6 +209,13 @@ def set_experiment_enabled(engine: Engine, experiment_id: str, enabled: bool) ->
         )
 
 
+def set_topic_enabled(engine: Engine, topic_id: int, enabled: bool) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            update(topic).where(topic.c.id == topic_id).values(enabled=enabled)
+        )
+
+
 def assign_experiment(
     engine: Engine, experiment_id: str, topic_id: int | None, sort_order: int
 ) -> None:

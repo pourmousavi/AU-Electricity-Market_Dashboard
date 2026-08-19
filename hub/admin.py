@@ -89,6 +89,28 @@ def _render_usage(engine) -> None:
     )
 
 
+def apply_topic_visibility(engine, topic_id: int, key: str) -> None:
+    db.set_topic_enabled(engine, topic_id, bool(st.session_state[key]))
+
+
+def apply_experiment_visibility(engine, exp_id: str, key: str) -> None:
+    """Write the visibility toggle straight through, without waiting for Save.
+
+    Hiding something from students is the one change here that must not
+    silently fail to happen: a toggle flicked and left unsaved reads as done
+    while the experiment is still live on the site. So the toggle *is* the
+    action, and Save is left to the fields that genuinely need editing first.
+    """
+    db.set_experiment_enabled(engine, exp_id, bool(st.session_state[key]))
+
+
+def _badge(text: str, colour: str) -> str:
+    # Names and titles are free text and badge syntax is bracket-delimited,
+    # so a bracket in one would end the badge early.
+    safe = text.strip().replace("[", "(").replace("]", ")")
+    return f":{colour}-badge[{safe}]"
+
+
 def experiment_label(row: dict, topic_choices: dict) -> str:
     """Accordion title: title, id, and a badge for where the experiment sits.
 
@@ -97,15 +119,34 @@ def experiment_label(row: dict, topic_choices: dict) -> str:
     nobody: unassigned, or assigned to a topic that no longer exists.
     """
     topic_id = row["topic_id"] if row["topic_id"] in topic_choices else None
-    if topic_id is None:
-        badge = ":grey-badge[unassigned]"
-    else:
-        # Topic names are free text and badge syntax is bracket-delimited, so
-        # a name containing a bracket would end the badge early.
-        name = topic_choices[topic_id].strip().replace("[", "(").replace("]", ")")
-        badge = f":blue-badge[{name}]"
+    badge = (
+        _badge("unassigned", "grey") if topic_id is None
+        else _badge(topic_choices[topic_id], "blue")
+    )
     flag = " ⚠️ orphaned" if row["orphaned"] else ""
     return f"{row['title']} · {row['experiment_id']} {badge}{flag}"
+
+
+def topic_label(topic: dict, experiments: list[dict]) -> str:
+    """Accordion title: the topic, then a chip per experiment it holds.
+
+    Green means a student can open it, grey means they cannot -- so an
+    apparently-open topic that in fact shows nobody anything (every chip
+    grey, or no chips at all) is visible from the collapsed list, which is
+    the state that is otherwise only discoverable by opening every
+    experiment in turn.
+    """
+    if experiments:
+        chips = " ".join(
+            _badge(
+                e["title"],
+                "green" if e["enabled"] and not e["orphaned"] else "grey",
+            )
+            for e in experiments
+        )
+    else:
+        chips = _badge("no experiments", "red")
+    return f"{topic['name']} {chips} — {topic['subtitle']}"
 
 
 def _render_content(engine, catalogue) -> None:
@@ -115,8 +156,13 @@ def _render_content(engine, catalogue) -> None:
 
     for topic in topics:
         with st.expander(
-            f"{topic['name']} — {topic['subtitle']}", expanded=False,
-            key=f"_hub.texp_{topic['id']}",
+            topic_label(
+                topic,
+                db.list_experiments(
+                    engine, topic_id=topic["id"], include_disabled=True
+                ),
+            ),
+            expanded=False, key=f"_hub.texp_{topic['id']}",
         ):
             name = st.text_input("Name", topic["name"], key=f"_hub.tn_{topic['id']}")
             subtitle = st.text_input(
@@ -130,9 +176,12 @@ def _render_content(engine, catalogue) -> None:
                 "Order", value=int(topic["sort_order"]), step=1,
                 key=f"_hub.to_{topic['id']}",
             )
+            vis_key = f"_hub.te_{topic['id']}"
             enabled = st.toggle(
                 "Topic visible and open", value=bool(topic["enabled"]),
-                key=f"_hub.te_{topic['id']}",
+                key=vis_key, on_change=apply_topic_visibility,
+                args=(engine, topic["id"], vis_key),
+                help="Applies immediately — the other fields need Save.",
             )
             save, delete = st.columns(2)
             if save.button("Save topic", key=f"_hub.tsave_{topic['id']}"):
@@ -208,9 +257,12 @@ def _render_content(engine, catalogue) -> None:
                 "Order within topic", value=int(row["sort_order"]), step=1,
                 key=f"_hub.eo_{exp_id}",
             )
+            vis_key = f"_hub.ee_{exp_id}"
             enabled = st.toggle(
                 "Available to students", value=bool(row["enabled"]),
-                key=f"_hub.ee_{exp_id}",
+                key=vis_key, on_change=apply_experiment_visibility,
+                args=(engine, exp_id, vis_key),
+                help="Applies immediately — the other fields need Save.",
             )
             if st.button("Save experiment", key=f"_hub.esave_{exp_id}"):
                 db.update_experiment_text(engine, exp_id, title, blurb)
