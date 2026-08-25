@@ -185,7 +185,7 @@ def render() -> None:
         fig = create_consumer_model_plot(intercept, slope, st.session_state.click_data)
 
         # Handle click events
-        clicked_point = st.plotly_chart(fig, use_container_width=True, key="consumer_plot")
+        clicked_point = st.plotly_chart(fig, width="stretch", key="consumer_plot")
 
         # Manual point addition (since Streamlit doesn't support click events easily)
         st.subheader("Add Analysis Point")
@@ -336,7 +336,7 @@ def render() -> None:
                 })
 
             df = pd.DataFrame(df_data)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
 
             # Show tooltip-like information for the last point
             if st.session_state.click_data:

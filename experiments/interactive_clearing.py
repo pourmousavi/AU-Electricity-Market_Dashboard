@@ -746,7 +746,7 @@ def render() -> None:
             dispatched_offers, satisfied_demands, clearing_price, equilibrium_qty,
             single_demand_mode=(market_mode == "Single Demand Level")
         )
-        st.plotly_chart(fig, use_container_width=True, key="market_clearing_plot")
+        st.plotly_chart(fig, width="stretch", key="market_clearing_plot")
 
         # Detailed Results Tables
         st.subheader("📊 Detailed Market Results")
@@ -756,14 +756,14 @@ def render() -> None:
             st.markdown("**Generator Dispatch Results**")
             gen_results = calculate_generator_metrics(dispatched_offers, clearing_price)
             gen_df = pd.DataFrame(gen_results)
-            st.dataframe(gen_df, use_container_width=True)
+            st.dataframe(gen_df, width="stretch")
 
         # Demand Results Table (only for multi-tier mode)
         if market_mode == "Multi-tier Bidding" and satisfied_demands:
             st.markdown("**Retailer Satisfaction Results**")
             demand_results = calculate_demand_metrics(satisfied_demands, clearing_price)
             demand_df = pd.DataFrame(demand_results)
-            st.dataframe(demand_df, use_container_width=True)
+            st.dataframe(demand_df, width="stretch")
 
     with col2:
         st.subheader("Market Results")

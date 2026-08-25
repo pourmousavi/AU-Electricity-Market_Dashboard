@@ -63,7 +63,7 @@ def render_market_results():
                 'Revenue ($)': f"{revenue:,.0f}",
                 'Capacity Factor (%)': f"{cf:.1f}",
             })
-        st.dataframe(pd.DataFrame(gen_results), use_container_width=True)
+        st.dataframe(pd.DataFrame(gen_results), width="stretch")
     with colB:
         st.markdown("### 🔵 Retailer Dispatch")
         ret_results = []
@@ -80,7 +80,7 @@ def render_market_results():
                 'Cost ($)': f"{cost:,.0f}",
                 'Fill Rate (%)': f"{fill:.1f}",
             })
-        st.dataframe(pd.DataFrame(ret_results), use_container_width=True)
+        st.dataframe(pd.DataFrame(ret_results), width="stretch")
 
 def _tab_body() -> None:
     render_market_results()

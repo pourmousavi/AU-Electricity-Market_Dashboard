@@ -77,7 +77,7 @@ def render_detailed_analysis():
         xaxis_tickangle=-45
     )
     
-    st.plotly_chart(fig_cost, width='stretch')  # Changed from use_container_width=True
+    st.plotly_chart(fig_cost, width='stretch')  # Changed from width="stretch"
     
     # Emission comparison
     st.markdown("### 🌱 Emission Comparison")
@@ -113,7 +113,7 @@ def render_detailed_analysis():
         xaxis_tickangle=-45
     )
     
-    st.plotly_chart(fig_emission, width='stretch')  # Changed from use_container_width=True
+    st.plotly_chart(fig_emission, width='stretch')  # Changed from width="stretch"
     
     # Cost vs Emission scatter plot
     st.markdown("### ⚖️ Cost vs Emission Trade-off")
@@ -171,7 +171,7 @@ def render_detailed_analysis():
         showlegend=True
     )
     
-    st.plotly_chart(fig_scatter, width='stretch')  # Changed from use_container_width=True
+    st.plotly_chart(fig_scatter, width='stretch')  # Changed from width="stretch"
     
     # ED-2 Ramping Impact Detailed Analysis
     if "ED-2" in st.session_state.solutions:
@@ -209,7 +209,7 @@ def render_detailed_analysis():
             
             if violation_data:
                 violation_df = pd.DataFrame(violation_data)
-                st.dataframe(violation_df, width='stretch')  # Changed from use_container_width=True
+                st.dataframe(violation_df, width='stretch')  # Changed from width="stretch"
             else:
                 st.success("No ramping violations found!")
         
@@ -232,7 +232,7 @@ def render_detailed_analysis():
                 })
             
             change_df = pd.DataFrame(change_data)
-            st.dataframe(change_df, width='stretch')  # Changed from use_container_width=True
+            st.dataframe(change_df, width='stretch')  # Changed from width="stretch"
 
 def _tab_body() -> None:
     render_detailed_analysis()

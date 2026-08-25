@@ -107,7 +107,7 @@ def render_pareto_frontier():
         hovermode='closest'
     )
     
-    st.plotly_chart(fig_pareto, width='stretch')  # Changed from use_container_width=True
+    st.plotly_chart(fig_pareto, width='stretch')  # Changed from width="stretch"
     
     # Summary statistics
     col1, col2, col3, col4 = st.columns(4)

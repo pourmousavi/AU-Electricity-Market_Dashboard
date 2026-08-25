@@ -382,7 +382,7 @@ def render() -> None:
         )
         edited = st.data_editor(
             pd.DataFrame(DEFAULT_BANDS), key="profit_bands",
-            num_rows="fixed", use_container_width=True,
+            num_rows="fixed", width="stretch",
         )
         blanks = _blank_band_cells(edited)
         if blanks:
@@ -489,13 +489,13 @@ def render() -> None:
             {"Component": "Marginal cost",
              "Working": f"fuel + {vom:,.1f} $/MWh variable O&M",
              "Result": f"${metrics['marginal_cost']:,.1f}/MWh"},
-        ]), use_container_width=True, hide_index=True)
+        ]), width="stretch", hide_index=True)
 
         # Create plots
         st.plotly_chart(create_price_duration_plot(metrics),
-                        use_container_width=True, key="profit_duration_plot")
+                        width="stretch", key="profit_duration_plot")
         st.plotly_chart(create_waterfall_plot(metrics),
-                        use_container_width=True, key="profit_waterfall_plot")
+                        width="stretch", key="profit_waterfall_plot")
 
         # Analysis
         if st.button("Analyze Investment", type="primary", key="profit_add"):
@@ -573,7 +573,7 @@ def render() -> None:
                 })
 
             results_df = pd.DataFrame(table_data)
-            st.dataframe(results_df, use_container_width=True)
+            st.dataframe(results_df, width="stretch")
 
             # Investment insights
             st.subheader("Investment Insights")

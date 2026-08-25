@@ -573,7 +573,7 @@ def page(
 
     # Display the 3D plot
     fig_3d = create_3d_plot()
-    st.plotly_chart(fig_3d, use_container_width=True)
+    st.plotly_chart(fig_3d, width="stretch")
 
     # Educational content
     st.header("📚 Understanding Duality Scenarios")

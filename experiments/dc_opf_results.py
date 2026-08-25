@@ -67,7 +67,7 @@ def render_dc_opf_results():
         })
     if lmp_rows:
         df_lmps = pd.DataFrame(lmp_rows)
-        st.dataframe(df_lmps, use_container_width=True)
+        st.dataframe(df_lmps, width="stretch")
     else:
         st.info("No LMPs available.")
     
@@ -113,7 +113,7 @@ def render_dc_opf_results():
         })
     if line_rows:
         df_lines = pd.DataFrame(line_rows)
-        st.dataframe(df_lines, use_container_width=True)
+        st.dataframe(df_lines, width="stretch")
     else:
         st.info("No line flow data available.")
     
@@ -156,7 +156,7 @@ def render_dc_opf_results():
                     'Raw dual': f"{raw if raw is not None else ''}",
                     'LMP ($/MWh)': f"{lmp if lmp is not None else ''}",
                 })
-            st.dataframe(pd.DataFrame(diag_rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(diag_rows), width="stretch")
 
 def _tab_body() -> None:
     render_dc_opf_results()

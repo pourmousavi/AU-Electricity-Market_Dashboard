@@ -318,7 +318,7 @@ def render() -> None:
             st.session_state.constraints,
             resolution
         )
-        st.plotly_chart(fig, use_container_width=True, config={
+        st.plotly_chart(fig, width="stretch", config={
             'scrollZoom': True,  # Enable scroll to zoom
             'displayModeBar': True,  # Always show the mode bar
             'modeBarButtonsToAdd': ['drawclosedpath', 'eraseshape'],  # Add drawing tools

@@ -112,7 +112,7 @@ def render_market_vs_optimal_comparison():
         })
     
     df_dispatch = pd.DataFrame(dispatch_comparison)
-    st.dataframe(df_dispatch, use_container_width=True)
+    st.dataframe(df_dispatch, width="stretch")
     
     # Visual comparison
     fig_dispatch = go.Figure()
@@ -148,7 +148,7 @@ def render_market_vs_optimal_comparison():
         barmode='group'
     )
     
-    st.plotly_chart(fig_dispatch, use_container_width=True)
+    st.plotly_chart(fig_dispatch, width="stretch")
     
     # Load dispatch comparison
     st.markdown("### 📈 Load Dispatch Comparison")
@@ -173,7 +173,7 @@ def render_market_vs_optimal_comparison():
         })
     
     df_load = pd.DataFrame(load_comparison)
-    st.dataframe(df_load, use_container_width=True)
+    st.dataframe(df_load, width="stretch")
     
     # LMP and Price Comparison
     st.markdown("### 💰 Price Analysis: Market vs DC OPF LMPs")
@@ -231,7 +231,7 @@ def render_market_vs_optimal_comparison():
         })
     
     df_lmp = pd.DataFrame(lmp_data)
-    st.dataframe(df_lmp, use_container_width=True)
+    st.dataframe(df_lmp, width="stretch")
     
     # Price insights
     max_lmp = max([
@@ -328,7 +328,7 @@ def render_market_vs_optimal_comparison():
                 })
             
             df_angles = pd.DataFrame(angle_comparison)
-            st.dataframe(df_angles, use_container_width=True)
+            st.dataframe(df_angles, width="stretch")
             
             # Line flows comparison
             st.markdown("#### 🔌 Transmission Line Flows Comparison")
@@ -366,7 +366,7 @@ def render_market_vs_optimal_comparison():
                 })
             
             df_flows = pd.DataFrame(flow_comparison)
-            st.dataframe(df_flows, use_container_width=True)
+            st.dataframe(df_flows, width="stretch")
             
             # Analysis insights
             st.markdown("#### 🔍 Key Insights")
@@ -504,7 +504,7 @@ def render_market_vs_optimal_comparison():
             
             if congestion_data:
                 df_congestion = pd.DataFrame(congestion_data)
-                st.dataframe(df_congestion, use_container_width=True)
+                st.dataframe(df_congestion, width="stretch")
         
         st.markdown("""
         **Why Market and Optimal Results Differ:**

@@ -84,7 +84,7 @@ def render_comparison_results():
     
     if summary_data:
         df_summary = pd.DataFrame(summary_data)
-        st.dataframe(df_summary, width='stretch')  # Changed from use_container_width=True
+        st.dataframe(df_summary, width='stretch')  # Changed from width="stretch"
     
     # Rest of the function remains the same...
     
@@ -193,7 +193,7 @@ def render_comparison_results():
                 fig.update_xaxes(title_text="Time Period" if i == rows else "", row=i, col=j)
                 fig.update_yaxes(title_text="Power (MW)" if j == 1 else "", row=i, col=j)
         
-        st.plotly_chart(fig, width='stretch')  # Changed from use_container_width=True
+        st.plotly_chart(fig, width='stretch')  # Changed from width="stretch"
 
 def count_ramping_violations(solution):
     """Count number of ramping violations in unconstrained solution"""

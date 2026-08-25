@@ -100,7 +100,7 @@ def render_individual_generator_analysis():
         height=500
     )
     
-    st.plotly_chart(fig, width='stretch')  # Changed from use_container_width=True
+    st.plotly_chart(fig, width='stretch')  # Changed from width="stretch"
     
     # Generator utilization table
     st.markdown(f"### 📊 {gen_name} Utilization Summary")
@@ -153,7 +153,7 @@ def render_individual_generator_analysis():
             }
     
     util_df = pd.DataFrame(util_data).T
-    st.dataframe(util_df, width='stretch')  # Changed from use_container_width=True
+    st.dataframe(util_df, width='stretch')  # Changed from width="stretch"
     
     # Ramping analysis for selected generator
     if "ED-2" in st.session_state.solutions:
@@ -203,7 +203,7 @@ def render_individual_generator_analysis():
             height=400
         )
         
-        st.plotly_chart(fig_ramp, width='stretch')  # Changed from use_container_width=True
+        st.plotly_chart(fig_ramp, width='stretch')  # Changed from width="stretch"
         
         # Ramping statistics
         col1, col2, col3 = st.columns(3)

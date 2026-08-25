@@ -430,7 +430,7 @@ def render() -> None:
             st.session_state.demand_bids, 
             st.session_state.market_analysis_data
         )
-        st.plotly_chart(fig, use_container_width=True, key="market_plot")
+        st.plotly_chart(fig, width="stretch", key="market_plot")
 
         # Show equilibrium information
         if st.session_state.supply_bids and st.session_state.demand_bids:
@@ -570,7 +570,7 @@ def render() -> None:
                 }
                 for bid in st.session_state.supply_bids[:5]  # Show first 5
             ])
-            st.dataframe(supply_df, use_container_width=True)
+            st.dataframe(supply_df, width="stretch")
             if len(st.session_state.supply_bids) > 5:
                 st.caption(f"... and {len(st.session_state.supply_bids) - 5} more")
 
@@ -585,7 +585,7 @@ def render() -> None:
                 }
                 for bid in st.session_state.demand_bids[:5]  # Show first 5
             ])
-            st.dataframe(demand_df, use_container_width=True)
+            st.dataframe(demand_df, width="stretch")
             if len(st.session_state.demand_bids) > 5:
                 st.caption(f"... and {len(st.session_state.demand_bids) - 5} more")
 
@@ -620,7 +620,7 @@ def render() -> None:
                 for i, point in enumerate(st.session_state.market_analysis_data)
             ])
 
-            st.dataframe(analysis_df, use_container_width=True)
+            st.dataframe(analysis_df, width="stretch")
 
             # Show details for last point
             if st.session_state.market_analysis_data:

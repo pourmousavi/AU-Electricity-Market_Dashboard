@@ -220,7 +220,7 @@ def render() -> None:
 
         # Create plot
         fig = create_market_power_plot(mc_a, mc_b, st.session_state.market_power_data)
-        st.plotly_chart(fig, use_container_width=True, key="market_power_plot")
+        st.plotly_chart(fig, width="stretch", key="market_power_plot")
 
         # Analysis
         if st.button("Analyze Current Configuration", type="primary", key="market_power_add"):
@@ -263,7 +263,7 @@ def render() -> None:
                              f"{results['cournot']['price']:.1f}"]
         })
 
-        st.dataframe(results_df, use_container_width=True)
+        st.dataframe(results_df, width="stretch")
 
         # Key insights
         st.subheader("Market Power Insights")

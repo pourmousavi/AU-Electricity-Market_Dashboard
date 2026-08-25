@@ -48,7 +48,7 @@ def render_generator_table():
             "ramp_down": st.column_config.NumberColumn("Ramp Down (MW/h)", min_value=1, max_value=200, step=5, width="small"),
             "emission_rate": st.column_config.NumberColumn("Emission Rate (tons/MWh)", min_value=0.1, max_value=2.0, step=0.05, format="%.3f", width="small")
         },
-        width='stretch',  # Changed from use_container_width=True
+        width='stretch',  # Changed from width="stretch"
         num_rows="fixed",
         key="generator_editor"  # Important: Add a unique key
     )
@@ -150,7 +150,7 @@ def _tab_body() -> None:
         showlegend=False
     )
 
-    st.plotly_chart(fig_demand, width='stretch')  # Changed from use_container_width=True
+    st.plotly_chart(fig_demand, width='stretch')  # Changed from width="stretch"
 
 
 def render() -> None:

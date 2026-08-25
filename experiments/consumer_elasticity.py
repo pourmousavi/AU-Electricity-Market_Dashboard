@@ -144,7 +144,7 @@ def render() -> None:
         fig = create_elasticity_plot(intercept, slope, st.session_state.elasticity_data)
 
         # Handle click events
-        clicked_point = st.plotly_chart(fig, use_container_width=True, key="elasticity_plot")
+        clicked_point = st.plotly_chart(fig, width="stretch", key="elasticity_plot")
 
         # Manual point addition
         st.subheader("Add Elasticity Analysis Point")
@@ -262,7 +262,7 @@ def render() -> None:
                 })
 
             df = pd.DataFrame(df_data)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
 
             # Show details for the last point
             if st.session_state.elasticity_data:

@@ -255,7 +255,7 @@ def render() -> None:
 
         # Create and display the plot with adjusted generators
         fig = create_pricing_comparison_plot(adjusted_generators, demand, st.session_state.pricing_analysis_data)
-        st.plotly_chart(fig, use_container_width=True, key="pricing_plot")
+        st.plotly_chart(fig, width="stretch", key="pricing_plot")
 
         # Show current merit order dispatch
         dispatch_order, clearing_price, total_dispatch, uniform_cost, payasbid_cost = calculate_market_clearing(
@@ -288,7 +288,7 @@ def render() -> None:
                 })
 
         merit_df = pd.DataFrame(merit_order_data)
-        st.dataframe(merit_df, use_container_width=True)
+        st.dataframe(merit_df, width="stretch")
 
         # Current market summary
         st.subheader("💡 Current Market Summary")
@@ -371,7 +371,7 @@ def render() -> None:
                 })
 
             df = pd.DataFrame(df_data)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
 
             # Latest point details - enhanced with renewable analysis
             if st.session_state.pricing_analysis_data:

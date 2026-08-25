@@ -494,7 +494,7 @@ def render() -> None:
             }
 
             st.markdown("**🎯 Solution Comparison:**")
-            st.dataframe(results_data, use_container_width=True)
+            st.dataframe(results_data, width="stretch")
 
         # Complexity comparison
         st.markdown("**⚡ Complexity Comparison:**")
@@ -524,7 +524,7 @@ def render() -> None:
             ]
         }
 
-        st.dataframe(comparison_data, use_container_width=True)
+        st.dataframe(comparison_data, width="stretch")
 
         # Key insights
         st.markdown("**🔑 Key Insights:**")

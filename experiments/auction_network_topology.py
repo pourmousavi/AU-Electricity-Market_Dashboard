@@ -210,7 +210,7 @@ def render_network_topology():
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     
     # Network data table
     st.markdown("### 📊 Network Data")
@@ -268,7 +268,7 @@ def render_network_topology():
                     help='Comma-separated list of retailers'
                 )
             },
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
         
@@ -348,7 +348,7 @@ def render_network_topology():
                     help='Line rating in MW'
                 )
             },
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
         
