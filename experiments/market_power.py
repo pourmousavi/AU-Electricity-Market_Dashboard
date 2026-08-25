@@ -317,7 +317,7 @@ def render() -> None:
     st.markdown("""
     ### 🎓 Course Integration
 
-    This dashboard integrates core concepts from **ELEC ENG 4087-7087** lectures:
+    This dashboard integrates core concepts from **ENGE X406** lectures:
 
     **Chapter 2.7**: Pool market pricing schemes and their economic implications  
     **Chapter 2.11**: Investment economics and fixed cost recovery through scarcity rent  

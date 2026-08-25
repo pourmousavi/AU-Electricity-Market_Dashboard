@@ -53,7 +53,7 @@ def render_home(engine) -> None:
 
     st.markdown(
         f"""<div class="hub-dark">
-  <div class="hub-eyebrow">ELEC ENG 4087/7087 · University of Adelaide</div>
+  <div class="hub-eyebrow">ENGE X406 · University of Adelaide</div>
   <div class="hub-title">Electricity Market &amp;<br/>Power Systems Operation</div>
   <div class="hub-sub">Interactive experiments for the concepts we build up across
   the course — supply and demand, market power, optimisation, duality, dispatch
