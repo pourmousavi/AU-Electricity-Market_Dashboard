@@ -4,8 +4,13 @@ Extracted from week6_duality.py (module-level body, minus the tab block at
 lines 391-463) on 2026-08-12. The three duality experiments -- strong_duality,
 weak_duality and duality_theorems -- each render this page plus their own tab
 body.
+
+Each also supplies the worked example it opens on, the examples its picker
+offers, and (for two of them) an interactive panel of its own, so that sharing
+this page no longer means rendering the same thing three times.
 """
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Callable, Dict, Optional, Tuple
 
 import streamlit as st
 import numpy as np
@@ -17,14 +22,161 @@ from scipy.optimize import linprog
 import sympy as sp
 
 
-def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
+# --- Worked examples ------------------------------------------------------
+#
+# One problem is nine values: the sense plus the eight coefficients. A
+# per-experiment default and a preset are the same thing -- a dict written
+# into session state under the slider keys -- so a preset is applied simply
+# by updating session state before the sliders are built on the next rerun.
+PROBLEM_KEYS: Tuple[str, ...] = (
+    "dual_type", "dual_c1", "dual_c2",
+    "dual_a1", "dual_b1", "dual_d1",
+    "dual_a2", "dual_b2", "dual_d2",
+)
+
+CUSTOM = "Custom parameters"
+
+# Slider ranges, as (min, max). a and b reach below zero so that a contradictory
+# pair of rows -- and with it an infeasible primal -- is reachable at all.
+# Presets are checked against these: one landing outside a range would raise
+# StreamlitValueAboveMaxError and take the whole page down.
+RANGES = {
+    "dual_c1": (-5.0, 5.0), "dual_c2": (-5.0, 5.0),
+    "dual_a1": (-5.0, 5.0), "dual_b1": (-5.0, 5.0), "dual_d1": (-10.0, 10.0),
+    "dual_a2": (-5.0, 5.0), "dual_b2": (-5.0, 5.0), "dual_d2": (-10.0, 10.0),
+}
+
+
+def problem(prob_type: str, c1: float, c2: float,
+            a1: float, b1: float, d1: float,
+            a2: float, b2: float, d2: float) -> Dict[str, object]:
+    """One worked example, keyed by the slider it drives."""
+    return dict(zip(PROBLEM_KEYS, (prob_type, c1, c2, a1, b1, d1, a2, b2, d2)))
+
+
+# max 3x1 + 2x2 st x1 + x2 <= 4, 2x1 + x2 <= 6. Optimum (2, 2), f* = 10, both
+# rows binding. This is what every duality experiment used to open on.
+STANDARD = problem("Maximize", 3.0, 2.0, 1.0, 1.0, 4.0, 2.0, 1.0, 6.0)
+
+# Same rows, but row 2 is slack at the optimum, so lambda_2* = 0.
+ONE_ROW_SLACK = problem("Maximize", 3.0, 2.0, 1.0, 1.0, 4.0, 2.0, 1.0, 10.0)
+
+# Minimise with c1 < 0: x1 grows without limit along a >= row, so the primal
+# is unbounded and its dual is infeasible.
+UNBOUNDED_PRIMAL = problem("Minimize", -1.0, 2.0, 1.0, 1.0, 4.0, 2.0, 1.0, 6.0)
+
+# x1 + x2 <= 4 and -x1 - x2 <= -6 ask for a sum both below 4 and above 6.
+# Reachable only because the a and b sliders reach below zero.
+INFEASIBLE_PRIMAL = problem("Maximize", 3.0, 2.0, 1.0, 1.0, 4.0, -1.0, -1.0, -6.0)
+
+
+# The example names, so an experiment's preset dict and the note printed for it
+# below the page cannot drift apart.
+STANDARD_NAME = "Standard LP - strong duality"
+# The same rows as STANDARD, named for what weak_duality uses them to show: the
+# gap between a student's own non-optimal picks, not the zero gap at optimum.
+SANDWICH_NAME = "Feasible pair with a gap"
+SLACK_NAME = "One row slack - a zero shadow price"
+UNBOUNDED_NAME = "Unbounded primal - infeasible dual"
+INFEASIBLE_NAME = "Infeasible primal - no dual bound"
+
+EXPERIMENT_NOTES: Dict[str, str] = {
+    STANDARD_NAME: "✅ Both problems have optimal solutions and the two objective values agree: the duality gap is zero.",
+    SLACK_NAME: "⚪ Row 2 is slack at the optimum, so its shadow price is zero -- relaxing a constraint nothing pushes against buys nothing.",
+    UNBOUNDED_NAME: "⚠️ The primal objective improves without limit, so no dual solution can bound it and the dual is infeasible.",
+    INFEASIBLE_NAME: "❌ The two rows contradict each other, so the primal has no feasible point at all.",
+    SANDWICH_NAME: "🥪 Both problems solve, so the gap between their OPTIMAL values is zero. The pair you pick below need not be optimal -- the gap between those is what weak duality bounds.",
+    CUSTOM: "🔧 The sliders are yours -- pick a worked example above to return to a known case.",
+}
+
+
+@dataclass(frozen=True)
+class Solution:
+    """The solved problem, handed to an experiment's own panel."""
+    prob_type: str
+    c: Tuple[float, float]
+    A: Tuple[Tuple[float, float], Tuple[float, float]]
+    d: Tuple[float, float]
+    x: Optional[object]
+    f: Optional[float]
+    lam: Optional[object]
+    g: Optional[float]
+
+    @property
+    def maximising(self) -> bool:
+        return self.prob_type == "Maximize"
+
+    def primal_slack(self) -> Optional[Tuple[float, float]]:
+        """d_i - A_i x*, per row. Zero means the row binds."""
+        if self.x is None:
+            return None
+        return tuple(
+            self.d[i] - (self.A[i][0] * self.x[0] + self.A[i][1] * self.x[1])
+            for i in range(2)
+        )
+
+    def dual_slack(self) -> Optional[Tuple[float, float]]:
+        """The dual row's slack per primal variable, signed so 0 means binding."""
+        if self.lam is None:
+            return None
+        # Dual rows are A-transpose: column j of A against lambda.
+        lhs = tuple(
+            self.A[0][j] * self.lam[0] + self.A[1][j] * self.lam[1]
+            for j in range(2)
+        )
+        if self.maximising:  # A'lambda >= c
+            return tuple(lhs[j] - self.c[j] for j in range(2))
+        return tuple(self.c[j] - lhs[j] for j in range(2))
+
+
+def _no_solution_message(status: Optional[int]) -> str:
+    """Why linprog returned nothing. Statuses are HiGHS's: 2 infeasible, 3 unbounded."""
+    if status == 2:
+        return "Infeasible: no point satisfies every row"
+    if status == 3:
+        return "Unbounded: the objective improves without limit in some direction"
+    return "No feasible solution found"
+
+
+def page(
+    tab_body: Optional[Callable[[str], None]] = None,
+    *,
+    defaults: Optional[Dict[str, object]] = None,
+    presets: Optional[Dict[str, Dict[str, object]]] = None,
+    panel: Optional[Callable[["Solution"], None]] = None,
+) -> tuple:
     """Render the shared duality page and return what the tab sections need.
 
     ``tab_body`` renders the calling experiment's own tab content. It is invoked
     at the point where week6_duality.py rendered its ``st.tabs`` block, so the
     sections below it still appear after it, as they do today. It is handed
     ``prob_type`` because the duality_theorems body branches on it.
+
+    ``defaults`` is the worked example the experiment opens on, and ``presets``
+    the ones its picker offers. ``panel`` renders the experiment's own
+    interactive section directly under the optimal solutions, where the numbers
+    it talks about are still on screen; it is handed a ``Solution``.
     """
+    defaults = defaults or STANDARD
+    presets = presets or {"Standard LP - Strong Duality": STANDARD}
+
+    # Seed before any widget is built: with the key already in session state a
+    # slider takes its value from there, which is also how a preset applies.
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+    if "dual_preset" not in st.session_state:
+        st.session_state["dual_preset"] = next(iter(presets))
+
+    def _apply_preset() -> None:
+        """Write the chosen example over the sliders. Runs before the rerun."""
+        chosen = presets.get(st.session_state["dual_preset"])
+        if chosen is not None:
+            st.session_state.update(chosen)
+
+    def _mark_custom() -> None:
+        """A hand-moved slider means the named example no longer describes it."""
+        st.session_state["dual_preset"] = CUSTOM
     # Add custom CSS for better formatting
     st.markdown("""
     <style>
@@ -52,44 +204,58 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
 
     # Sidebar
     st.sidebar.title("📊 Duality Theory Dashboard")
-    st.sidebar.markdown("**Electricity Market & Power System Operation**")
-    st.sidebar.markdown("**ELEC ENG 4087/7087**")
+    st.sidebar.markdown("**Electricity Market and Power System Operations**")
+    st.sidebar.markdown("**ENGE X406**")
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Instructor:** Ali Pourmousavi Kani")
     st.sidebar.markdown("**Topic:** Linear Programming Duality")
 
     # Main title
     st.title("Linear Programming Duality Theory")
-    st.markdown("**Interactive visualization of primal-dual relationships with strong and weak duality demonstrations**")
+    st.markdown("**Interactive visualisation of primal and dual, with strong and weak duality**")
 
     # Problem setup section
     st.header("🔧 Problem Configuration")
+
+    # The example picker drives every slider below it, so it leads the section
+    # rather than sitting at the foot of the page describing a case nothing set.
+    st.selectbox(
+        "Worked example",
+        list(presets) + [CUSTOM],
+        key="dual_preset",
+        on_change=_apply_preset,
+        help="Picking one rewrites the sliders below. Move any slider and this "
+             "returns to Custom parameters.",
+    )
 
     col1, col2 = st.columns([1, 1])
 
     with col1:
         st.subheader("Objective Function")
-        c1 = st.slider("c₁ (coefficient of x₁)", -5.0, 5.0, 3.0, 0.1)
-        c2 = st.slider("c₂ (coefficient of x₂)", -5.0, 5.0, 2.0, 0.1)
+        c1 = st.slider("c₁ (coefficient of x₁)", *RANGES["dual_c1"], step=0.1,
+                       key="dual_c1", on_change=_mark_custom)
+        c2 = st.slider("c₂ (coefficient of x₂)", *RANGES["dual_c2"], step=0.1,
+                       key="dual_c2", on_change=_mark_custom)
 
     with col2:
         st.subheader("Problem Type")
-        prob_type = st.selectbox("Optimization Type", ["Maximize", "Minimize"])
+        prob_type = st.selectbox("Problem type", ["Maximize", "Minimize"],
+                                 key="dual_type", on_change=_mark_custom)
 
     # Now we can use prob_type to set the inequality sign
     inequality_sign = "≤" if prob_type == "Maximize" else "≥"
 
     with col1:    
         st.subheader(f"Constraint 1: a₁x₁ + b₁x₂ {inequality_sign} d₁")
-        a1 = st.slider("a₁", 0.1, 5.0, 1.0, 0.1)
-        b1 = st.slider("b₁", 0.1, 5.0, 1.0, 0.1)
-        d1 = st.slider("d₁", 1.0, 10.0, 4.0, 0.1)
+        a1 = st.slider("a₁", *RANGES["dual_a1"], step=0.1, key="dual_a1", on_change=_mark_custom)
+        b1 = st.slider("b₁", *RANGES["dual_b1"], step=0.1, key="dual_b1", on_change=_mark_custom)
+        d1 = st.slider("d₁", *RANGES["dual_d1"], step=0.1, key="dual_d1", on_change=_mark_custom)
 
     with col2:    
         st.subheader(f"Constraint 2: a₂x₁ + b₂x₂ {inequality_sign} d₂")
-        a2 = st.slider("a₂", 0.1, 5.0, 2.0, 0.1)
-        b2 = st.slider("b₂", 0.1, 5.0, 1.0, 0.1)
-        d2 = st.slider("d₂", 1.0, 10.0, 6.0, 0.1)
+        a2 = st.slider("a₂", *RANGES["dual_a2"], step=0.1, key="dual_a2", on_change=_mark_custom)
+        b2 = st.slider("b₂", *RANGES["dual_b2"], step=0.1, key="dual_b2", on_change=_mark_custom)
+        d2 = st.slider("d₂", *RANGES["dual_d2"], step=0.1, key="dual_d2", on_change=_mark_custom)
 
     # Convert to standard form based on problem type
     if prob_type == "Maximize":
@@ -184,12 +350,13 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
             result = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
             if result.success:
                 if prob_type == "Maximize":
-                    return result.x, -result.fun
+                    return result.x, -result.fun, result.status
                 else:
-                    return result.x, result.fun
+                    return result.x, result.fun, result.status
+            return None, None, result.status
         except:
             pass
-        return None, None
+        return None, None, None
 
     def solve_dual():
         if prob_type == "Maximize":
@@ -207,16 +374,17 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
             result = linprog(c, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
             if result.success:
                 if prob_type == "Maximize":
-                    return result.x, result.fun
+                    return result.x, result.fun, result.status
                 else:
-                    return result.x, -result.fun
+                    return result.x, -result.fun, result.status
+            return None, None, result.status
         except:
             pass
-        return None, None
+        return None, None, None
 
     # Solve both problems
-    primal_x, primal_obj = solve_primal()
-    dual_lambda, dual_obj = solve_dual()
+    primal_x, primal_obj, primal_status = solve_primal()
+    dual_lambda, dual_obj, dual_status = solve_dual()
 
     # Results section
     st.header("🎯 Optimal Solutions")
@@ -230,7 +398,7 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
             st.write(f"**x₂*** = {primal_x[1]:.3f}")
             st.write(f"**Objective Value** = {primal_obj:.3f}")
         else:
-            st.write("No feasible solution found")
+            st.write(_no_solution_message(primal_status))
 
     with col2:
         st.subheader("Dual Solution")
@@ -239,7 +407,7 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
             st.write(f"**λ₂*** = {dual_lambda[1]:.3f}")
             st.write(f"**Objective Value** = {dual_obj:.3f}")
         else:
-            st.write("No feasible solution found")
+            st.write(_no_solution_message(dual_status))
 
     with col3:
         st.subheader("Duality Analysis")
@@ -261,6 +429,18 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
             else:
                 if primal_obj >= dual_obj - 1e-10:
                     st.info("✓ Weak duality condition satisfied: Primal ≥ Dual")
+
+    # The experiment's own interactive section goes here, while the optimal
+    # values it refers to are still on screen.
+    if panel is not None:
+        panel(Solution(
+            prob_type=prob_type,
+            c=(c1, c2),
+            A=((a1, b1), (a2, b2)),
+            d=(d1, d2),
+            x=primal_x, f=primal_obj,
+            lam=dual_lambda, g=dual_obj,
+        ))
 
     # 3D Visualization
     st.header("📊 3D Feasible Region Visualization")
@@ -432,24 +612,11 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
     # Interactive experiments
     st.header("🧪 Interactive Experiments")
 
-    experiment = st.selectbox(
-        "Select an experiment to understand duality:",
-        [
-            "Standard LP - Strong Duality",
-            "Unbounded Primal - Infeasible Dual", 
-            "Infeasible Primal - Unbounded Dual",
-            "Custom Parameters"
-        ]
-    )
-
-    if experiment == "Standard LP - Strong Duality":
-        st.info("✅ This shows the normal case where both problems have optimal solutions with equal objective values.")
-    elif experiment == "Unbounded Primal - Infeasible Dual":
-        st.warning("⚠️ The primal can increase indefinitely, making the dual infeasible. This demonstrates weak duality limits.")
-    elif experiment == "Infeasible Primal - Unbounded Dual":
-        st.error("❌ Contradictory constraints make the primal infeasible, causing the dual to be unbounded.")
-    else:
-        st.info("🔧 Use the custom parameters above to explore different scenarios.")
+    # Reads the picker at the top of the page rather than offering a second one
+    # -- the old duplicate here set a message and nothing else.
+    experiment = st.session_state["dual_preset"]
+    st.markdown(f"Selected above: **{experiment}**")
+    st.markdown(EXPERIMENT_NOTES.get(experiment, EXPERIMENT_NOTES[CUSTOM]))
 
     st.markdown("""
     **Try these experiments:**
@@ -480,10 +647,10 @@ def page(tab_body: Optional[Callable[[str], None]] = None) -> tuple:
     # Footer
     st.markdown("---")
     st.markdown("""
-    **Educational Dashboard for ELEC ENG 4087/7087**  
-    *This interactive tool demonstrates linear programming duality theory essential for understanding electricity market operations and power system optimization.*
+    **Course dashboard for ENGE X406**  
+    *This interactive tool demonstrates linear programming duality theory essential for understanding electricity market operations and power system optimisation.*
 
-    **Next Topics:** Mixed-Integer Linear Programming, Unit Commitment, Optimal Power Flow
+    **Next:** Topic 5, economic dispatch, where the dual of the power balance row is the price
     """)
 
     return primal_x, primal_obj, dual_lambda, dual_obj

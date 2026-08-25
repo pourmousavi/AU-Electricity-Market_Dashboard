@@ -9,9 +9,11 @@ will crash or silently misbehave.
 
 Rule: when the active STATE_GROUP changes, drop every non-hub-owned key.
 Hub-owned keys are prefixed and always survive. Modules that share a common
-`experiments/_kit` page declare the same STATE_GROUP, so switching between
-them preserves state -- a student moving between sibling experiments keeps
-their inputs, matching how a single tabbed dashboard used to behave.
+`experiments/_kit` page USUALLY declare the same STATE_GROUP, so switching
+between them preserves state -- a student moving between sibling experiments
+keeps their inputs, matching how a single tabbed dashboard used to behave.
+The duality three are the exception: they share a page but each opens on its
+own worked example, so each declares its own group and is re-seeded on entry.
 """
 from __future__ import annotations
 

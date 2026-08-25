@@ -6,8 +6,9 @@ module, and therefore no global lock serialising concurrent students.
 
 Session state is still namespaced, because separate modules can pick the same
 key -- `supply_bids` means different things in different experiments. Modules
-that deliberately share state (the ones backed by a common experiments/_kit
-page) declare the same STATE_GROUP.
+that deliberately share state (most of the ones backed by a common
+experiments/_kit page) declare the same STATE_GROUP; the duality three
+deliberately do not, so each re-seeds its own worked example.
 """
 from __future__ import annotations
 

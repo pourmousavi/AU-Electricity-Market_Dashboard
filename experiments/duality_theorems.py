@@ -8,7 +8,18 @@ import streamlit as st
 
 from experiments._kit import duality
 
-STATE_GROUP = "duality"
+# Own group: each duality experiment opens on its own worked example, which a
+# sibling's leftover slider values would overwrite.
+STATE_GROUP = "duality.theorems"
+
+DEFAULTS = duality.STANDARD
+
+PRESETS = {
+    duality.STANDARD_NAME: duality.STANDARD,
+    duality.SLACK_NAME: duality.ONE_ROW_SLACK,
+    duality.UNBOUNDED_NAME: duality.UNBOUNDED_PRIMAL,
+    duality.INFEASIBLE_NAME: duality.INFEASIBLE_PRIMAL,
+}
 
 
 def _tab_body(prob_type: str) -> None:
@@ -19,11 +30,11 @@ def _tab_body(prob_type: str) -> None:
     
     if prob_type == "Maximize":
         st.latex(r"""
-        c^T x \leq b^T \lambda \quad \text{(Maximization problems)}
+        c^T x \leq b^T \lambda \quad \text{(Maximisation problems)}
         """)
     else:
         st.latex(r"""
-        c^T x \geq b^T \lambda \quad \text{(Minimization problems)}
+        c^T x \geq b^T \lambda \quad \text{(Minimisation problems)}
         """)
     
     st.markdown("**Strong Duality Theorem:**")
@@ -40,4 +51,4 @@ def _tab_body(prob_type: str) -> None:
 
 
 def render() -> None:
-    duality.page(_tab_body)
+    duality.page(_tab_body, defaults=DEFAULTS, presets=PRESETS)

@@ -123,6 +123,30 @@ for _exp_id in TAB_IDS:
     _SIBLINGS_BY_GROUP.setdefault(_group, []).append(_exp_id)
 
 
+def _kit_page(exp_id: str) -> str:
+    """The experiments/_kit page this experiment renders, if any."""
+    module = importlib.import_module(f"experiments.{exp_id}")
+    for value in vars(module).values():
+        name = getattr(value, "__name__", "")
+        if name.startswith("experiments._kit."):
+            return name
+    return exp_id
+
+
+# The leak test below groups by SHARED _KIT PAGE, not by STATE_GROUP. The two
+# used to coincide, but the three duality experiments now each carry their own
+# STATE_GROUP (they open on different worked examples, so sharing slider values
+# would overwrite them) while still rendering one page. Grouping by state group
+# here would make the sibling-leak loop vacuous for exactly the three modules
+# it was written for.
+_SIBLINGS_BY_KIT: dict[str, list[str]] = {}
+_KIT_OF: dict[str, str] = {}
+for _exp_id in TAB_IDS:
+    _kit = _kit_page(_exp_id)
+    _KIT_OF[_exp_id] = _kit
+    _SIBLINGS_BY_KIT.setdefault(_kit, []).append(_exp_id)
+
+
 def _rendered_text(app) -> str:
     """All text an experiment actually put on the page, in one string."""
     parts = []
@@ -147,7 +171,7 @@ def test_only_the_selected_experiment_renders(exp_id: str) -> None:
     # no "own content" to assert present here. The sibling-absence checks
     # below still fully apply to it.
 
-    for sibling_id in _SIBLINGS_BY_GROUP[_GROUP_OF[exp_id]]:
+    for sibling_id in _SIBLINGS_BY_KIT[_KIT_OF[exp_id]]:
         if sibling_id == exp_id:
             continue
         sibling_marker = TAB_MARKERS[sibling_id]
@@ -165,7 +189,13 @@ def test_only_the_selected_experiment_renders(exp_id: str) -> None:
 # symptom is exactly what STATE_GROUP exists to prevent: a generator setup
 # cleared when moving between two dispatch experiments.
 EXPECTED_GROUPS: dict[str, set[str]] = {
-    "duality": {"strong_duality", "weak_duality", "duality_theorems"},
+    # One group each: the three render the same page but open on different
+    # worked examples, so carrying a sibling's slider values would overwrite
+    # the example the student just navigated to. The shared-page leak check
+    # above is grouped by _kit page instead, so it stays meaningful.
+    "duality.strong": {"strong_duality"},
+    "duality.weak": {"weak_duality"},
+    "duality.theorems": {"duality_theorems"},
     "dispatch": {
         "dispatch_generator_setup", "dispatch_comparison",
         "dispatch_detailed_analysis", "dispatch_individual_generators",
