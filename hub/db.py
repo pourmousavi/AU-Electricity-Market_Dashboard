@@ -73,7 +73,7 @@ def bootstrap(engine: Engine) -> None:
 # one into a word: "Lp Vertex Walk", "Dc Opf Results". These stay upper-case.
 # The title is only a starting point either way, editable per experiment in the
 # admin panel, and reconcile never rewrites one that already exists.
-ACRONYMS = frozenset({"lp", "dc", "opf"})
+ACRONYMS = frozenset({"lp", "dc", "opf", "ed"})
 
 
 def _default_title(experiment_id: str) -> str:
