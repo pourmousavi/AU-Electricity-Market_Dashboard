@@ -28,6 +28,9 @@ DEFAULTS = {
 
 OFFERS = {gen.offer for gen in ed.GENERATORS}
 
+# Unicode subscripts, for the HTML table where LaTeX cannot reach.
+SUB = {1: "\u2081", 2: "\u2082", 3: "\u2083"}
+
 
 def _price_cell(lam: float) -> str:
     """Lambda, in purple when it matches no offer in the market."""
@@ -51,23 +54,21 @@ def _violations(result: ed.Dispatch, ramps) -> list[tuple[int, int, float]]:
     return out
 
 
-TH = ("padding:.45rem .6rem;text-align:center;font-size:1.05rem;"
-      f"border-bottom:2px solid {ed.SILVER};color:{ed.NAVY}")
-TD = ("padding:.45rem .6rem;text-align:center;font-size:1.05rem;"
-      f"border-bottom:1px solid {ed.SILVER};color:{ed.NAVY}")
-TH_LEFT = TH.replace("text-align:center", "text-align:left")
-
-
 def _plan_table(result: ed.Dispatch, demands, ramps, flag: bool) -> str:
-    """One column per interval: dispatch, price, interval cost."""
+    """One column per interval: dispatch, price, interval cost.
+
+    A real HTML table, so its headers use the Unicode letters rather than
+    LaTeX: an HTML block is opaque to the markdown parser, and maths inside it
+    would render as its own source. The symbols are defined in LaTeX in the
+    legend printed above the two tables.
+    """
     flagged = {(t, k) for t, k, _ in _violations(result, ramps)} if flag else set()
 
     def row(label: str, cells: list[str]) -> str:
-        body = "".join(f'<td style="{TD}">{c}</td>' for c in cells)
-        return f'<tr><th style="{TH_LEFT}">{label}</th>{body}</tr>'
+        return f"<tr><th>{label}</th>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
-    header = f'<tr><th style="{TH_LEFT}">Demand D_t (MW)</th>' + "".join(
-        f'<th style="{TH}">{d:,.0f}</th>' for d in demands
+    head = f"<tr><th>Demand D\u209c (MW)</th>" + "".join(
+        f"<th>{d:,.0f}</th>" for d in demands
     ) + "</tr>"
 
     rows = ""
@@ -76,14 +77,11 @@ def _plan_table(result: ed.Dispatch, demands, ramps, flag: bool) -> str:
         for t in range(len(demands)):
             mark = ' <span class="ed-flag">ramp exceeded</span>' if (t, k) in flagged else ""
             cells.append(f"{result.P[t][k]:,.0f}{mark}")
-        rows += row(f"P({gen.name}, t) MW", cells)
-    rows += row("lambda ($/MWh)",
-                [_price_cell(l) for l in result.lam])
-    rows += row("Cost ($ per five-minute interval)",
-                [ed.money(c) for c in result.cost])
+        rows += row(f"{gen.name}: P{SUB[k + 1]},\u209c (MW)", cells)
+    rows += row(f"{ed.LAMBDA}\u209c ($/MWh)", [_price_cell(l) for l in result.lam])
+    rows += row("Cost ($ per interval)", [ed.money(c) for c in result.cost])
 
-    return ('<div class="ed-wrap"><table style="width:100%;border-collapse:collapse">'
-            f"{header}{rows}</table></div>")
+    return f'<div class="ed-table"><table>{head}{rows}</table></div>'
 
 
 def render() -> None:
@@ -94,7 +92,7 @@ def render() -> None:
         "Ramp limits and the price of movement",
         "Three consecutive five-minute intervals. Solve them one at a time and "
         "the answer is the same three separate markets. Couple them with a ramp "
-        "limit and the price in one interval starts paying for what the "
+        r"limit and $\lambda_t$ in one interval starts paying for what the "
         "generators have to do in the others.",
     )
 
@@ -108,17 +106,17 @@ def render() -> None:
         for t in range(T)
     ]
 
-    ramps_on = st.toggle(
-        "Ramps on", key=RAMPS_ON_KEY,
-        help="Off means no inter-temporal constraint at all. There is no ramp "
-             "on interval 1, so the first interval is never limited by where "
-             "the units started.",
+    ramps_on = st.toggle("Ramps on", key=RAMPS_ON_KEY)
+    st.caption(
+        r"The ramp rows are $|P_{k,t} - P_{k,t-1}| \le R_k$ for $t = 2, 3$. "
+        r"There is no ramp on the first interval, so $t_1$ is never limited "
+        r"by where the units started."
     )
     ramp_columns = st.columns(3)
     ramps = [
         float(ramp_columns[k].number_input(
-            f"{gen.name} RU = RD (MW per interval)", min_value=1, max_value=1500,
-            step=5, key=RAMP_KEYS[k], disabled=not ramps_on,
+            f"{gen.name}: RU = RD (MW per interval)", min_value=1,
+            max_value=1500, step=5, key=RAMP_KEYS[k], disabled=not ramps_on,
         ))
         for k, gen in enumerate(ed.GENERATORS)
     ]
@@ -127,9 +125,15 @@ def render() -> None:
     together = ed.solve(demands, ramps=ramps if ramps_on else None)
 
     if not alone.ok or not together.ok:
-        ed.note(f"<strong>No dispatch.</strong> "
-                f"{alone.message or together.message}")
+        ed.note(f"**No dispatch.** {alone.message or together.message}")
         return
+
+    st.markdown(
+        r"In the tables below, $P_{k,t}$ is the dispatch of generator $k$ in "
+        r"interval $t$, $\lambda_t$ is that interval's price in \$/MWh, and "
+        r"the cost row is dollars per five-minute interval, that is "
+        r"$\sum_k c_k P_{k,t} \Delta T$."
+    )
 
     left, right = st.columns(2)
     with left:
@@ -148,14 +152,15 @@ def render() -> None:
     else:
         breaches = _violations(alone, ramps)
         if breaches:
-            items = "".join(
-                f"<li>{ed.GENERATORS[k].name} moves {move:+,.0f} MW from "
-                f"t{t} to t{t + 1}, and its limit is {ramps[k]:,.0f} MW.</li>"
+            items = "\n".join(
+                rf"- {ed.GENERATORS[k].name} moves ${move:+,.0f}$ MW from "
+                rf"$t_{t}$ to $t_{t + 1}$, and $R_{k + 1} = {ramps[k]:,.0f}$ MW."
                 for t, k, move in breaches
             )
             ed.note(
                 "The left-hand plan is cheaper interval by interval, but it "
-                f"commits movements the units cannot make:<ul>{items}</ul>"
+                "commits movements the units cannot make:\n\n"
+                f"{items}\n\n"
                 "The right-hand plan is the cheapest one they can actually "
                 "follow, and it is what the prices are read from."
             )
@@ -165,15 +170,15 @@ def render() -> None:
 
     if any(not any(abs(l - o) < 1e-6 for o in OFFERS) for l in together.lam):
         st.markdown(
-            f'<div class="ed-wrap"><p style="color:{ed.PURPLE};font-weight:700">'
-            "The prices shown in purple match no offer in the market: no one "
-            "offered this price.</p></div>",
+            rf'<span style="color:{ed.PURPLE};font-weight:700">'
+            r"The prices shown in purple match no offer in the market: "
+            r"no one offered this price.</span>",
             unsafe_allow_html=True,
         )
 
     st.subheader("Binding ramp rows")
     binding = [
-        (f"{gen.name} {way}, t{step + 1} to t{step + 2}", nu)
+        (gen.name, way, step + 1, step + 2, k, nu)
         for step in range(len(together.nu_up))
         for k, gen in enumerate(ed.GENERATORS)
         for nu, way in ((together.nu_up[step][k], "ramp-up"),
@@ -181,40 +186,30 @@ def render() -> None:
         if nu > 1e-6
     ]
     if not binding:
-        st.markdown('<div class="ed-wrap"><p>No ramp row is binding, so no '
-                    "ramp multiplier is non-zero.</p></div>",
-                    unsafe_allow_html=True)
+        st.markdown(r"No ramp row is binding, so every $\nu$ is zero.")
     else:
-        for name, nu in binding:
-            st.markdown(
-                f'<div class="ed-row"><span class="who">{name}</span> is '
-                f"<strong>binding</strong>, nu = {nu:,.2f} $/MWh. That is the "
-                "marginal value of relaxing a constraint: one more MW of "
-                f"movement allowed on this step is worth {nu:,.2f} $/MWh.</div>",
-                unsafe_allow_html=True,
+        for name, way, a, b, k, nu in binding:
+            ed.row(
+                rf"**{name} {way}, $t_{a}$ to $t_{b}$** is **binding**, with "
+                rf"$\nu = {nu:,.2f}$ \$/MWh. That is the marginal value of "
+                rf"relaxing a constraint: one more MW of movement allowed on "
+                rf"this step is worth ${nu:,.2f}$ \$/MWh."
             )
 
     st.subheader("Totals over the three intervals")
     left, right = st.columns(2)
-    left.markdown(
-        ed.headline("Total offered cost", ed.money(together.total_cost),
-                    "$ over the three intervals"),
-        unsafe_allow_html=True,
-    )
-    right.markdown(
-        ed.headline("Total consumer payment",
-                    ed.money(together.payment(demands)),
-                    "$ over the three intervals"),
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="ed-wrap"><p>These are two separate quantities and they '
-        "are never added together. The cost is what the generators offered to "
-        "produce the energy. The payment is the sum of lambda_t x D_t x "
-        "Delta T, which is what the consumers hand over at the cleared "
-        "price.</p></div>",
-        unsafe_allow_html=True,
-    )
+    with left:
+        ed.headline(r"Total offered cost (\$)", ed.money(together.total_cost))
+    with right:
+        ed.headline(r"Total consumer payment (\$)",
+                    ed.money(together.payment(demands)))
+    st.markdown("These are two separate quantities and they are never added "
+                "together. The cost is what the generators offered to produce "
+                "the energy,")
+    st.latex(r"\text{cost} = \sum_{t} \sum_{k} c_k P_{k,t} \, \Delta T")
+    st.markdown("while the payment is what the consumers hand over at the "
+                "cleared price,")
+    st.latex(r"\text{payment} = \sum_{t} \lambda_t \, D_t \, \Delta T")
 
     st.subheader("The one-megawatt probe")
     interval = st.radio(
@@ -226,7 +221,7 @@ def render() -> None:
     probe = ed.solve(probe_demands, ramps=ramps if ramps_on else None)
 
     if not probe.ok:
-        ed.note(f"<strong>One MW more at t{interval} is not feasible.</strong> "
+        ed.note(rf"**One MW more at $t_{interval}$ is not feasible.** "
                 f"{probe.message}")
         return
 
@@ -237,14 +232,17 @@ def render() -> None:
             if abs(move) < 1e-6:
                 continue
             items.append(
-                f"<li>{gen.name} {move:+,.0f} MW at t{t + 1}, at "
-                f"{gen.offer:,.0f} $/MWh: {move * gen.offer:+,.2f} $/h</li>"
+                rf"- {gen.name} moves ${move:+,.0f}$ MW at $t_{t + 1}$, at "
+                rf"$c_{k + 1} = {gen.offer:,.0f}$ \$/MWh: "
+                rf"${move * gen.offer:+,.2f}$ \$/h"
             )
     chain = (probe.total_cost - together.total_cost) * ed.PER_HOUR
     st.markdown(
-        f'<div class="ed-wrap"><p>One more MW at t{interval} sets off this '
-        f"chain of movements:</p><ul>{''.join(items)}</ul>"
-        f"<p><strong>Total {chain:,.2f} $/h, which is lambda at t{interval} = "
-        f"{together.lam[interval - 1]:,.2f} $/MWh.</strong></p></div>",
-        unsafe_allow_html=True,
+        rf"One more MW at $t_{interval}$ sets off this chain of movements:"
+        "\n\n" + "\n".join(items)
+    )
+    st.latex(
+        rf"\sum \text{{movements}} = {chain:,.2f} \ \$/\mathrm{{h}} "
+        rf"= \lambda_{interval} = {together.lam[interval - 1]:,.2f} \ "
+        rf"\$/\mathrm{{MWh}}"
     )

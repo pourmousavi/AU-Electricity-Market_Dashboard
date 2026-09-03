@@ -43,7 +43,7 @@ def _profit_chart(price: float, offer: float) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=[0, price], y=[inside, inside], mode="lines",
-        line=dict(color=ed.NAVY, width=5), name="offer at or below lambda",
+        line=dict(color=ed.NAVY, width=5), name=f"offer at or below {ed.LAMBDA}",
         hovertemplate="offer %{x:.0f} $/MWh, profit %{y:,.0f} $/h<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
@@ -53,7 +53,7 @@ def _profit_chart(price: float, offer: float) -> go.Figure:
     ))
     fig.add_trace(go.Scatter(
         x=[price, 100], y=[0.0, 0.0], mode="lines",
-        line=dict(color=ed.MUTED, width=5), name="offer above lambda",
+        line=dict(color=ed.MUTED, width=5), name=f"offer above {ed.LAMBDA}",
         hovertemplate="offer %{x:.0f} $/MWh, profit %{y:,.0f} $/h<extra></extra>",
     ))
     profit = _profit(offer, price)
@@ -90,9 +90,10 @@ def render() -> None:
 
     ed.header(
         "Offering your true cost",
-        "You own G4: true cost 45 $/MWh, capacity 50 MW. G1, G2 and G3 set "
-        "lambda between them, and at 50 MW your unit is far too small to move "
-        "it. Your offer decides one thing only, whether G4 is dispatched.",
+        r"You own $G_4$: true cost $c_4 = 45$ \$/MWh, capacity 50 MW. $G_1$, "
+        r"$G_2$ and $G_3$ set $\lambda$ between them, and at 50 MW your unit "
+        r"is far too small to move it. Your offer decides one thing only, "
+        r"whether $G_4$ is dispatched.",
     )
 
     st.subheader("Pick the day")
@@ -115,46 +116,49 @@ def render() -> None:
     dispatched = profit is not None and offer < price
 
     columns = st.columns(3)
-    columns[0].markdown(
-        ed.headline(f"{scenario}: demand", f"{demand:,.0f}", "MW"),
-        unsafe_allow_html=True,
+    with columns[0]:
+        ed.headline(f"{scenario}: demand $D$ (MW)", f"{demand:,.0f}")
+    with columns[1]:
+        ed.headline(r"Price $\lambda$ (\$/MWh)", f"{price:,.2f}")
+    with columns[2]:
+        if profit is None:
+            ed.headline(r"$G_4$ outcome", "marginal")
+        else:
+            ed.headline(r"$G_4$ profit $\pi$ (\$/h)", f"{profit:+,.0f}")
+
+    st.markdown("Your profit for the hour is")
+    st.latex(
+        r"\pi = \begin{cases}"
+        r"(\lambda - c_4)\,\bar{P}_4 & \text{if your offer} \le \lambda \\[2pt]"
+        r"0 & \text{otherwise}"
+        r"\end{cases}"
     )
-    columns[1].markdown(
-        ed.headline("Price lambda", f"{price:,.2f}", "$/MWh"),
-        unsafe_allow_html=True,
-    )
-    if profit is None:
-        columns[2].markdown(
-            ed.headline("G4 outcome", "marginal", ""), unsafe_allow_html=True)
-    else:
-        columns[2].markdown(
-            ed.headline("G4 profit", f"{profit:+,.0f}", "$/h"),
-            unsafe_allow_html=True,
-        )
 
     if profit is None:
         ed.note(
-            "<strong>Marginal: dispatch is a coin toss, profit is zero either "
-            "way.</strong> Your offer sits exactly on lambda, so being "
-            f"dispatched pays you {price:,.0f} $/MWh for energy that costs you "
-            f"{price:,.0f} $/MWh to make."
+            "**Marginal: dispatch is a coin toss, profit is zero either way.** "
+            r"Your offer sits exactly on $\lambda$, so being dispatched pays "
+            rf"you ${price:,.0f}$ \$/MWh for energy that costs you "
+            rf"${price:,.0f}$ \$/MWh to make."
         )
     elif dispatched:
         ed.note(
-            f"<strong>G4 is dispatched</strong> at {G4_CAPACITY:,.0f} MW, paid "
-            f"lambda = {price:,.2f} $/MWh against a true cost of "
-            f"{G4_COST:,.0f} $/MWh. Profit = (lambda - 45) x 50 = "
-            f"{profit:+,.0f} $/h."
+            rf"**$G_4$ is dispatched** at $\bar{{P}}_4 = {G4_CAPACITY:,.0f}$ MW, "
+            rf"paid $\lambda = {price:,.2f}$ \$/MWh against a true cost of "
+            rf"$c_4 = {G4_COST:,.0f}$ \$/MWh, so "
+            rf"$\pi = ({price:,.0f} - {G4_COST:,.0f}) \times "
+            rf"{G4_CAPACITY:,.0f} = {profit:+,.0f}$ \$/h."
             + ("" if profit >= 0 else " That is a loss, and you offered your "
                "way into it.")
         )
     else:
         ed.note(
-            "<strong>G4 is not dispatched.</strong> Your offer is above lambda, "
-            "so the market passes you over and your profit is 0 $/h."
-            + (" On this day that is the right outcome: running would have lost "
-               "you money." if price < G4_COST else
-               " On this day you have just given up 250 $/h you could have had.")
+            r"**$G_4$ is not dispatched.** Your offer is above $\lambda$, so "
+            r"the market passes you over and $\pi = 0$ \$/h."
+            + (" On this day that is the right outcome: running would have "
+               "lost you money." if price < G4_COST else
+               r" On this day you have just given up $250$ \$/h you could "
+               "have had.")
         )
 
     st.plotly_chart(_profit_chart(price, offer), width="stretch")
@@ -167,16 +171,15 @@ def render() -> None:
     )
 
     st.subheader("The two days side by side")
-    rows = ""
     for name, day_demand in SCENARIOS.items():
         day_price = ed.price_at(day_demand)
         margin = (day_price - G4_COST) * G4_CAPACITY
-        rows += (
-            f'<div class="ed-row"><span class="who">{name}</span>: '
-            f"D = {day_demand:,.0f} MW, lambda = {day_price:,.0f} $/MWh. "
-            f"Offering 45 $/MWh {'runs G4' if day_price > G4_COST else 'keeps G4 off'} "
-            f"and earns {max(margin, 0.0):+,.0f} $/h. "
-            f"{'Offering above lambda would forfeit that.' if day_price > G4_COST else f'Offering below lambda would run it at {margin:+,.0f} $/h.'}"
-            "</div>"
+        runs = day_price > G4_COST
+        ed.row(
+            rf"**{name}**: $D = {day_demand:,.0f}$ MW, so "
+            rf"$\lambda = {day_price:,.0f}$ \$/MWh. Offering $c_4 = 45$ \$/MWh "
+            rf"{'runs' if runs else 'keeps off'} $G_4$ and earns "
+            rf"${max(margin, 0.0):+,.0f}$ \$/h. "
+            + ("Offering above $\\lambda$ would forfeit that." if runs else
+               rf"Offering below $\lambda$ would run it at ${margin:+,.0f}$ \$/h.")
         )
-    st.markdown(rows, unsafe_allow_html=True)

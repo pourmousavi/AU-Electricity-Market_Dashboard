@@ -229,62 +229,105 @@ def price_at(demand: float, minimums: Sequence[float] = (0.0, 0.0, 0.0),
 # These pages are projected over Zoom to a second campus, so the sizes below
 # are the floor, not a preference: headline numbers 28px and up, body text
 # 16px and up, Plotly tick labels 14px and up.
+#
+# Every symbol a student reads goes through KaTeX, which means it has to reach
+# the markdown parser as TEXT. Streamlit parses `$...$` on text nodes only: a
+# block-level tag such as `<div>` opens an HTML block and everything to the
+# next blank line becomes one opaque node, so maths inside it renders as the
+# literal string `$\lambda$`. So the coloured boxes below are not wrappers at
+# all. Each is an empty INLINE marker span that CSS finds with :has(), leaving
+# the prose beside it as ordinary markdown for KaTeX to pick up.
 CHART_FONT = dict(size=16, color=NAVY)
 TICK_FONT = dict(size=14, color=NAVY)
+
+# Plotly has no KaTeX in Streamlit, so chart furniture uses the Unicode
+# letters instead. Same symbols the lectures use, just not typeset.
+LAMBDA = "\u03bb"
+NU = "\u03bd"
 
 
 def css() -> None:
     """Scoped styles for the Topic 5 experiments."""
     st.markdown(
         f"""<style>
-.ed-wrap, .ed-wrap p, .ed-wrap li, .ed-wrap td, .ed-wrap th {{
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] td,
+[data-testid="stMarkdownContainer"] th {{
   font-size: 1.05rem; color: {NAVY};
 }}
-.ed-head {{
-  background: {LAVENDER}; border-left: 8px solid {PURPLE};
-  border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: .8rem;
+/* KaTeX sets its own size, so lift it explicitly or inline symbols end up
+   smaller than the prose they sit in when projected. */
+.katex {{ font-size: 1.14em; }}
+.katex-display {{ margin: .5rem 0; }}
+
+[data-testid="stMetric"] {{
+  background: {LAVENDER}; border: 2px solid {SILVER};
+  border-left: 8px solid {PURPLE}; border-radius: 12px;
+  padding: .85rem 1.05rem;
 }}
-.ed-head .lab {{
-  font-size: 1rem; letter-spacing: .08em; text-transform: uppercase;
-  color: {MUTED}; font-weight: 700;
+[data-testid="stMetricLabel"] p {{
+  font-size: 1rem; font-weight: 700; color: {MUTED};
 }}
-.ed-head .val {{
-  font-size: 2.4rem; line-height: 1.15; font-weight: 800; color: {NAVY};
+[data-testid="stMetricValue"] {{
+  font-size: 2.1rem; font-weight: 800; color: {NAVY};
 }}
-.ed-head .unit {{ font-size: 1.15rem; color: {MUTED}; font-weight: 600; }}
-.ed-note {{
+
+/* The marker spans themselves never show; they exist for :has() to find. */
+.ed-mark {{ display: none; }}
+[data-testid="stElementContainer"]:has(.ed-mark-note) {{
   background: {LIMESTONE}; border-left: 8px solid {NAVY};
-  border-radius: 12px; padding: 1rem 1.2rem; margin: .8rem 0;
-  font-size: 1.1rem; color: {NAVY};
+  border-radius: 12px; padding: .9rem 1.2rem; margin: .7rem 0;
+}}
+[data-testid="stElementContainer"]:has(.ed-mark-row) {{
+  background: #FFFFFF; border: 2px solid {SILVER};
+  border-radius: 12px; padding: .7rem 1.1rem; margin-bottom: .5rem;
+}}
+[data-testid="stElementContainer"]:has(.ed-mark-marginal) {{
+  background: {LAVENDER}; border-color: {PURPLE};
 }}
 .ed-flag {{
   display: inline-block; background: {LIMESTONE}; color: {NAVY};
   border: 2px solid {PURPLE}; border-radius: 99px;
   padding: .1rem .6rem; font-size: 1rem; font-weight: 700;
 }}
-.ed-row {{
-  border: 2px solid {SILVER}; border-radius: 12px;
-  padding: .7rem 1rem; margin-bottom: .5rem; font-size: 1.05rem;
-  color: {NAVY}; background: #FFFFFF;
+.ed-table table {{ width: 100%; border-collapse: collapse; }}
+.ed-table th, .ed-table td {{
+  padding: .45rem .6rem; text-align: center; font-size: 1.05rem;
+  color: {NAVY}; border-bottom: 1px solid {SILVER};
 }}
-.ed-row.marginal {{ background: {LAVENDER}; border-color: {PURPLE}; }}
-.ed-row .who {{ font-size: 1.25rem; font-weight: 800; }}
-.ed-row .foc {{ font-family: ui-monospace, monospace; font-size: 1.05rem; }}
+.ed-table th {{ border-bottom: 2px solid {SILVER}; }}
+.ed-table th:first-child {{ text-align: left; }}
 </style>""",
         unsafe_allow_html=True,
     )
 
 
-def headline(label: str, value: str, unit: str = "") -> str:
-    unit_html = f' <span class="unit">{unit}</span>' if unit else ""
-    return (
-        f'<div class="ed-head"><div class="lab">{label}</div>'
-        f'<div class="val">{value}{unit_html}</div></div>'
-    )
+def _marked(marker: str, md: str) -> None:
+    """Emit `md` in a box CSS draws around it.
+
+    The span and the first line of `md` share a line deliberately. A line
+    holding nothing but a tag would start an HTML BLOCK and swallow the maths
+    after it; a tag with text beside it stays inline, so `md` is parsed as
+    ordinary markdown and its `$...$` reaches KaTeX.
+    """
+    st.markdown(f'<span class="ed-mark {marker}"></span>{md.lstrip()}',
+                unsafe_allow_html=True)
 
 
-def note(text: str) -> None:
-    st.markdown(f'<div class="ed-note">{text}</div>', unsafe_allow_html=True)
+def note(md: str) -> None:
+    """A limestone banner. `md` may contain LaTeX."""
+    _marked("ed-mark-note", md)
+
+
+def row(md: str, marginal: bool = False) -> None:
+    """One boxed row. `marginal` tints it lavender for the price setter."""
+    _marked("ed-mark-row" + (" ed-mark-marginal" if marginal else ""), md)
+
+
+def headline(label: str, value: str) -> None:
+    """A big number. The label is markdown, so it may contain LaTeX."""
+    st.metric(label, value)
 
 
 def money(value: float) -> str:
@@ -295,12 +338,10 @@ def header(title: str, subtitle: str) -> None:
     """The common page opening: course identity, then what this page is."""
     css()
     st.markdown(
-        f'<div class="ed-wrap"><div style="color:{MUTED};font-size:1rem;'
-        'letter-spacing:.08em;text-transform:uppercase;font-weight:700">'
-        "ENGE X406 Electricity Market and Power System Operations"
-        f"</div></div>",
+        f'<div style="color:{MUTED};font-size:1rem;letter-spacing:.08em;'
+        'text-transform:uppercase;font-weight:700">'
+        "ENGE X406 Electricity Market and Power System Operations</div>",
         unsafe_allow_html=True,
     )
     st.title(title)
-    st.markdown(f'<div class="ed-wrap"><p>{subtitle}</p></div>',
-                unsafe_allow_html=True)
+    st.markdown(subtitle)

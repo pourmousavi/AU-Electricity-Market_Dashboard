@@ -249,3 +249,46 @@ def test_presets_stay_inside_their_widget_ranges() -> None:
             assert 0 <= value <= 4000
         elif key in ed_ramp.RAMP_KEYS:
             assert 1 <= value <= 1500
+
+
+# --- LaTeX rendering -------------------------------------------------------
+#
+# Streamlit parses `$...$` on markdown TEXT nodes. A block-level tag opens an
+# HTML block that runs to the next blank line, and everything inside it is one
+# opaque node, so maths written there renders as its own source. These two
+# tests pin the two places that rule bites.
+
+def test_marker_span_stays_inline_so_latex_still_renders() -> None:
+    """The box marker must share its line with the prose, not sit alone."""
+    import re
+    from streamlit.testing.v1 import AppTest
+
+    harness = (
+        f"import sys\nsys.path.insert(0, {str(ROOT)!r})\n"
+        "import importlib\n"
+        "importlib.import_module('experiments.ed_price').render()\n"
+    )
+    app = AppTest.from_string(harness, default_timeout=180).run()
+    marked = [m.value for m in app.markdown
+              if m.value.startswith('<span class="ed-mark')]
+    assert marked, "no marked boxes rendered at all"
+    for value in marked:
+        assert re.match(r'^<span class="ed-mark[^"]*"></span>\S', value), (
+            "a marker span alone on its line opens an HTML block and would "
+            f"swallow the maths after it: {value[:80]!r}"
+        )
+
+
+def test_the_html_table_uses_unicode_not_latex() -> None:
+    """The one real HTML block on these pages cannot carry LaTeX, so it must
+    not try: its symbols are the Unicode letters, defined in LaTeX alongside."""
+    from experiments import ed_ramp
+
+    table = ed_ramp._plan_table(
+        ed.solve(RAMP_DEMANDS, ramps=RAMP_LIMITS),
+        RAMP_DEMANDS, RAMP_LIMITS, flag=False,
+    )
+    assert "<table>" in table
+    for command in ("\\lambda", "\\mu", "\\nu", "\\Delta", "\\text"):
+        assert command not in table, f"{command} would render as its own source"
+    assert ed.LAMBDA in table
