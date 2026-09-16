@@ -161,13 +161,18 @@ def battery_block(prices, bat, binary=False, e_end=None, inject=None, force_dis=
                            None if marg is None else -marg, -res.fun)
 
 
+def _money(x) -> float:
+    """A dollar amount without the -0.00 that HiGHS round-off would print."""
+    return float(round(x, 6) + 0.0)
+
+
 def _battery_result(ok, prices, Pch, Pdis, E, v, surplus):
     # HiGHS returns -0.0 and 1e-15 on inactive taps; students read the table.
     Pch, Pdis, E = (np.where(np.abs(a) < EPS, 0.0, a) for a in (Pch, Pdis, E))
     return dict(
-        ok=ok, Pch=Pch, Pdis=Pdis, E=E, v=v, surplus=float(surplus),
+        ok=ok, Pch=Pch, Pdis=Pdis, E=E, v=v, surplus=_money(surplus),
         bought=float(Pch.sum() * DT), sold=float(Pdis.sum() * DT),
-        cash=float(sum(prices[t] * (Pdis[t] - Pch[t]) * DT for t in range(len(prices)))),
+        cash=_money(sum(prices[t] * (Pdis[t] - Pch[t]) * DT for t in range(len(prices)))),
     )
 
 
@@ -226,10 +231,10 @@ def market(demands, bat, binary=False, e_end=None):
     out = _battery_result(True, lam, Pch, Pdis, E, v, declared)
     out.update(
         lam=lam, P=P,
-        gen_cost=float(sum(gen.offer * P[t, k] * DT for t in range(T)
-                           for k, gen in enumerate(gens))),
-        consumers=float(sum(lam[t] * demands[t] * DT for t in range(T))),
-        rents=[float(sum((lam[t] - gen.offer) * P[t, k] * DT for t in range(T)))
+        gen_cost=_money(sum(gen.offer * P[t, k] * DT for t in range(T)
+                            for k, gen in enumerate(gens))),
+        consumers=_money(sum(lam[t] * demands[t] * DT for t in range(T))),
+        rents=[_money(sum((lam[t] - gen.offer) * P[t, k] * DT for t in range(T)))
                for k, gen in enumerate(gens)],
     )
     return out
@@ -265,66 +270,78 @@ def both_taps(r):
 
 
 # --- Page furniture -------------------------------------------------------
+#
+# Every symbol a student reads goes through KaTeX. The two tables are markdown
+# pipe tables, not HTML blocks, because a block-level tag is opaque to the
+# markdown parser and maths inside it would print as its own source; inline
+# spans are fine, so cells can still be coloured. The only place KaTeX cannot
+# reach is inside Plotly, where the Unicode letters stand in, as in Topic 5.
 
 def _num(x: float) -> str:
     return f"{x:,.0f}" if abs(x - round(x)) < 1e-9 else f"{x:,.2f}"
 
 
 def _decision(t, lam, r, bat, offer, bid):
-    """The short phrase in the last column of the table."""
+    """The short phrase in the last column of the table, with the test in maths."""
     Pch, Pdis = r["Pch"][t], r["Pdis"][t]
     E_prev = bat["E0"] if t == 0 else r["E"][t - 1]
     if Pch > EPS and Pdis > EPS:
         return "both taps open"
     if Pdis >= bat["P"] - EPS:
-        return "discharge at limit"
+        return r"discharge at limit, $P^{dis}_t = \bar{P}$"
     if Pch >= bat["P"] - EPS:
-        return "charge at limit"
+        return r"charge at limit, $P^{ch}_t = \bar{P}$"
     if offer is None:
         return "discharging" if Pdis > EPS else "charging" if Pch > EPS else "holding"
     if Pdis > EPS:
-        return f"discharging: {_num(lam)} ≥ {offer:.2f}"
+        return rf"discharging: $\lambda_t = {_num(lam)} \ge {offer:.2f}$"
     if Pch > EPS:
-        return f"charging: {_num(lam)} ≤ {bid:.2f}"
+        return rf"charging: $\lambda_t = {_num(lam)} \le {bid:.2f}$"
     if E_prev <= EPS and lam >= offer - EPS:
-        return "holding: tank empty"
+        return r"holding: tank empty, $E_{t-1} = 0$"
     if E_prev >= bat["E"] - EPS and lam <= bid + EPS:
-        return "holding: tank full"
+        return r"holding: tank full, $E_{t-1} = \bar{E}$"
     if abs(lam - bid) < 1e-4:
-        return f"indifferent: {_num(lam)} = {bid:.2f}"
+        return rf"indifferent: $\lambda_t = {_num(lam)} = {bid:.2f}$"
     if abs(lam - offer) < 1e-4:
-        return f"indifferent: {_num(lam)} = {offer:.2f}"
+        return rf"indifferent: $\lambda_t = {_num(lam)} = {offer:.2f}$"
     if lam < bid:
-        return f"holding: {_num(lam)} < {bid:.2f} but cannot charge"
+        return rf"holding: $\lambda_t = {_num(lam)} < {bid:.2f}$ but cannot charge"
     if lam > offer:
-        return f"holding: {_num(lam)} > {offer:.2f} but cannot discharge"
-    return f"holding: {bid:.2f} < {_num(lam)} < {offer:.2f}"
+        return rf"holding: $\lambda_t = {_num(lam)} > {offer:.2f}$ but cannot discharge"
+    return rf"holding: ${bid:.2f} < \lambda_t = {_num(lam)} < {offer:.2f}$"
+
+
+def _pipe_table(head: list[str], rows: list[list[str]]) -> str:
+    """A markdown table, so its cells reach KaTeX."""
+    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    lines += ["| " + " | ".join(r) + " |" for r in rows]
+    return "\n".join(lines)
 
 
 def _table(lam, r, bat) -> str:
     offer, bid = effective(r["v"], bat)
-    grey = f'style="color:{ed.MUTED}"'
-    head = "".join(f"<th>{h}</th>" for h in (
-        "t", f"{LAMBDA}{SUB_T} ($/MWh)", f"P{SUB_T}ᶜʰ (MW)",
-        f"P{SUB_T}ᵈⁱˢ (MW)", f"E{SUB_T} (MWh)", "soe.m", f"v{SUB_T}",
-        "effective bid", "effective offer", "decision"))
-    rows = ""
+    grey = f'<span style="color:{ed.MUTED}">n/a</span>'
+    head = [r"$t$", r"$\lambda_t$ (\$/MWh)", r"$P^{ch}_t$ (MW)", r"$P^{dis}_t$ (MW)",
+            r"$E_t$ (MWh)", r"$\text{soe.m}_t$", r"$v_t$",
+            r"bid $b^{ch} + \eta^{ch} v_t$", r"offer $c^{dis} + v_t / \eta^{dis}$",
+            "decision"]
+    rows = []
     for t in range(len(lam)):
         if r["v"] is None:
-            mid = "".join(f"<td {grey}>n/a</td>" for _ in range(4))
+            mid = [grey] * 4
             o = b = None
         else:
             v = r["v"][t]
             colour = ed.PURPLE if v < -EPS else ed.NAVY
             o, b = offer[t], bid[t]
-            mid = (f"<td>{-v:,.2f}</td>"
-                   f'<td style="color:{colour};font-weight:700">{v:,.2f}</td>'
-                   f"<td>{b:,.2f}</td><td>{o:,.2f}</td>")
-        rows += (f"<tr><th>t{t + 1}</th><td>{_num(lam[t])}</td>"
-                 f"<td>{r['Pch'][t]:,.1f}</td><td>{r['Pdis'][t]:,.1f}</td>"
-                 f"<td>{r['E'][t]:,.2f}</td>{mid}"
-                 f"<td>{_decision(t, lam[t], r, bat, o, b)}</td></tr>")
-    return f'<div class="ed-table"><table><tr>{head}</tr>{rows}</table></div>'
+            mid = [f"${-v:,.2f}$",
+                   f'<span style="color:{colour};font-weight:700">${v:,.2f}$</span>',
+                   f"${b:,.2f}$", f"${o:,.2f}$"]
+        rows.append([f"${t + 1}$", f"${_num(lam[t])}$", f"${r['Pch'][t]:,.1f}$",
+                     f"${r['Pdis'][t]:,.1f}$", f"${r['E'][t]:,.2f}$", *mid,
+                     _decision(t, lam[t], r, bat, o, b)])
+    return _pipe_table(head, rows)
 
 
 def _axis(title, **extra):
@@ -405,32 +422,33 @@ def _chain(base, probe, lam, bat) -> list[str]:
             gain = d_dis * DT * (lam[s] - bat["c"])
             verb = "is sold" if d_dis > 0 else "is no longer sold"
             lines.append(
-                f"- {abs(d_dis) * DT:.2f} MWh at the meter {verb} in t = {s + 1}: "
-                f"{abs(d_dis) * DT:.2f} × ({_num(lam[s])} − {_num(bat['c'])}) "
-                f"= {gain:+.2f} $.")
+                rf"- ${abs(d_dis) * DT:.2f}$ MWh at the meter {verb} in $t = {s + 1}$: "
+                rf"${abs(d_dis) * DT:.2f} \times (\lambda_{{{s + 1}}} - c^{{dis}}) "
+                rf"= {abs(d_dis) * DT:.2f} \times ({_num(lam[s])} - {_num(bat['c'])}) "
+                rf"= {gain:+.2f}$ \$.")
         if abs(d_ch) > 1e-4:
             gain = -d_ch * DT * (lam[s] - bat["b"])
             verb = "less is bought" if d_ch < 0 else "more is bought"
             lines.append(
-                f"- {abs(d_ch) * DT:.2f} MWh {verb} in t = {s + 1} at {_num(lam[s])} "
-                f"against a bid of {_num(bat['b'])}: {gain:+.2f} $.")
+                rf"- ${abs(d_ch) * DT:.2f}$ MWh {verb} in $t = {s + 1}$ at "
+                rf"$\lambda_{{{s + 1}}} = {_num(lam[s])}$ against a bid of "
+                rf"$b^{{ch}} = {_num(bat['b'])}$: ${gain:+.2f}$ \$.")
     return lines
 
 
 def _settlement(off, on) -> str:
-    gens = ed.GENERATORS
-    items = [("Generation cost Σ cₖ Pₖ,ₜ ΔT", off["gen_cost"], on["gen_cost"]),
-             (f"Consumer payment Σ {LAMBDA}{SUB_T} D{SUB_T} ΔT", off["consumers"], on["consumers"])]
-    items += [(f"{g.name} rent Σ ({LAMBDA}{SUB_T} − {_num(g.offer)}) P ΔT",
-               off["rents"][k], on["rents"][k]) for k, g in enumerate(gens)]
-    items.append(("Battery cash", 0.0, on["cash"]))
-    rows = "".join(
-        f"<tr><th>{label}</th><td>{ed.money(a)}</td><td>{ed.money(b)}</td>"
-        f'<td style="color:{ed.PURPLE if abs(b - a) > 0.005 else ed.NAVY};font-weight:700">'
-        f"{b - a:+,.2f}</td></tr>" for label, a, b in items)
-    return ('<div class="ed-table"><table><tr><th>$ over the hour</th>'
-            "<th>without battery</th><th>with battery</th><th>change</th></tr>"
-            f"{rows}</table></div>")
+    items = [(r"generation cost $\sum_t \sum_k c_k P_{k,t} \, \Delta T$",
+              off["gen_cost"], on["gen_cost"]),
+             (r"consumer payment $\sum_t \lambda_t D_t \, \Delta T$",
+              off["consumers"], on["consumers"])]
+    items += [(rf"{g.name} rent $\sum_t (\lambda_t - c_{k + 1}) P_{{{k + 1},t}} \, \Delta T$",
+               off["rents"][k], on["rents"][k]) for k, g in enumerate(ed.GENERATORS)]
+    items.append((r"battery cash $\sum_t \lambda_t (P^{dis}_t - P^{ch}_t) \, \Delta T$",
+                  0.0, on["cash"]))
+    rows = [[label, f"${ed.money(a)}$", f"${ed.money(b)}$",
+             f'<span style="color:{ed.PURPLE if abs(b - a) > 0.005 else ed.NAVY};'
+             f'font-weight:700">${b - a:+,.2f}$</span>'] for label, a, b in items]
+    return _pipe_table([r"\$ over the hour", "without battery", "with battery", "change"], rows)
 
 
 def _send_to_price_path(lam) -> None:
@@ -449,10 +467,18 @@ def render() -> None:
         "Every interval the optimiser writes a price for the energy inside the "
         "tank. That price, corrected for losses, is the battery's real offer.",
     )
+    st.markdown(
+        f"""<style>
+[data-testid="stMarkdownContainer"] table {{ width: 100%; border-collapse: collapse; }}
+[data-testid="stMarkdownContainer"] th, [data-testid="stMarkdownContainer"] td {{
+  text-align: center; padding: .45rem .5rem; border-bottom: 1px solid {ed.SILVER};
+}}
+[data-testid="stMarkdownContainer"] th {{ border-bottom: 2px solid {ed.SILVER}; }}
+</style>""", unsafe_allow_html=True)
 
     mode = st.radio("Mode", ["Price path", "Market"], horizontal=True, key="boc_mode",
-                    help="Price path: the battery is a price taker facing a given "
-                         "λ. Market: the three Topic 5 generators and the "
+                    help=r"Price path: the battery is a price taker facing a given "
+                         r"$\lambda_t$. Market: the three Topic 5 generators and the "
                          "battery inside the operator's problem.")
     market_mode = mode == "Market"
 
@@ -464,20 +490,24 @@ def render() -> None:
 
     st.subheader("Battery")
     c1, c2, c3, c4 = st.columns(4)
-    c1.slider("P̄ (MW)", 0, 600, step=10, key="boc_P")
-    c2.slider("Ē (MWh)", 0, 200, step=1, key="boc_E")
-    c3.number_input("E₀ (MWh)", min_value=0.0, max_value=200.0, step=1.0, key="boc_E0")
-    end_on = c4.checkbox("Terminal energy E₁₂ ≥ Eₑₙₔ", key="boc_end_on")
-    c4.number_input("Eₑₙₔ (MWh)", min_value=0.0, max_value=200.0, step=1.0,
+    c1.slider(r"$\bar{P}$ (MW)", 0, 600, step=10, key="boc_P",
+              help=r"$0 \le P^{ch}_t \le \bar{P}$ and $0 \le P^{dis}_t \le \bar{P}$")
+    c2.slider(r"$\bar{E}$ (MWh)", 0, 200, step=1, key="boc_E",
+              help=r"$0 \le E_t \le \bar{E}$")
+    c3.number_input(r"$E_0$ (MWh)", min_value=0.0, max_value=200.0, step=1.0, key="boc_E0",
+                    help="Energy in the tank before the first interval")
+    end_on = c4.checkbox(r"Terminal energy $E_{12} \ge E_{end}$", key="boc_end_on")
+    c4.number_input(r"$E_{end}$ (MWh)", min_value=0.0, max_value=200.0, step=1.0,
                     key="boc_end", disabled=not end_on)
     c1, c2, c3, c4 = st.columns(4)
-    c1.number_input("ηᶜʰ", min_value=0.50, max_value=1.00, step=0.01, key="boc_eta_c")
-    c2.number_input("ηᵈⁱˢ", min_value=0.50, max_value=1.00, step=0.01, key="boc_eta_d")
-    c3.number_input("Charge bid bᶜʰ ($/MWh)", step=1.0, key="boc_b")
-    c4.number_input("Discharge offer cᵈⁱˢ ($/MWh)", step=1.0, key="boc_c")
+    c1.number_input(r"$\eta^{ch}$", min_value=0.50, max_value=1.00, step=0.01, key="boc_eta_c")
+    c2.number_input(r"$\eta^{dis}$", min_value=0.50, max_value=1.00, step=0.01, key="boc_eta_d")
+    c3.number_input(r"Charge bid $b^{ch}$ (\$/MWh)", step=1.0, key="boc_b")
+    c4.number_input(r"Discharge offer $c^{dis}$ (\$/MWh)", step=1.0, key="boc_c")
     binary = st.toggle("Enforce one tap at a time", key="boc_binary",
-                       help="Adds the binary uₜ so the battery cannot charge "
-                            "and discharge in the same interval.")
+                       help=r"Adds the binary $u_t$ with $P^{ch}_t \le \bar{P} u_t$ and "
+                            r"$P^{dis}_t \le \bar{P}(1 - u_t)$, so the battery cannot "
+                            "charge and discharge in the same interval.")
 
     bat = dict(P=float(st.session_state["boc_P"]), E=float(st.session_state["boc_E"]),
                E0=float(st.session_state["boc_E0"]),
@@ -488,10 +518,10 @@ def render() -> None:
 
     baseline = None
     if market_mode:
-        st.subheader("Demand Dₜ (MW)")
+        st.subheader(r"Demand $D_t$ (MW)")
         cols = st.columns(6)
         demands = [float(cols[t % 6].number_input(
-            f"t{t + 1}", min_value=0, max_value=4000, step=10, key=DEMAND_KEYS[t]))
+            rf"$D_{{{t + 1}}}$", min_value=0, max_value=4000, step=10, key=DEMAND_KEYS[t]))
             for t in range(T)]
         bat_off = st.toggle("Battery off", key="boc_bat_off",
                             help="Solve the market without the battery.")
@@ -507,32 +537,33 @@ def render() -> None:
         lam = r["lam"]
         baseline_lam = baseline["lam"]
     else:
-        st.subheader(f"Price path {LAMBDA}{SUB_T} ($/MWh)")
+        st.subheader(r"Price path $\lambda_t$ (\$/MWh)")
         cols = st.columns(6)
         lam = [float(cols[t % 6].number_input(
-            f"t{t + 1}", min_value=-1000, max_value=20000, step=1, key=LAM_KEYS[t]))
-            for t in range(T)]
+            rf"$\lambda_{{{t + 1}}}$", min_value=-1000, max_value=20000, step=1,
+            key=LAM_KEYS[t])) for t in range(T)]
         r = battery_block(lam, bat, binary=binary, e_end=e_end)
         if not r["ok"]:
-            ed.note("**No schedule.** The tank cannot get from E₀ to the "
-                    "terminal energy inside its limits.")
+            ed.note(r"**No schedule.** The tank cannot get from $E_0$ to $E_{end}$ "
+                    "inside its limits.")
             return
         baseline_lam = None
 
     st.plotly_chart(_price_chart(lam, r, bat, baseline_lam), width="stretch")
-    st.caption("The battery is marginal only where λ meets its effective offer "
-               "or bid. Neither number is in its bid; the tank puts them there.")
+    st.caption(r"The battery is marginal only where $\lambda_t$ meets its effective "
+               "offer or bid. Neither number is in its bid; the tank puts them there.")
     st.plotly_chart(_power_chart(r, bat), width="stretch")
 
     st.subheader("Every interval")
     st.markdown(_table(lam, r, bat), unsafe_allow_html=True)
-    st.caption("v is the value of one more megawatt-hour inside the tank. It is "
+    st.caption(r"$v_t$ is the value of one more megawatt-hour inside the tank. It is "
                "positive when that energy has somewhere profitable to go, zero when "
                "it has nowhere to go, and negative when it is in the way. In GAMS it "
-               "is minus the marginal on the SOE row.")
+               r"is minus the marginal on the SOE row: $v_t = -\text{soe.m}_t$.")
     if binary:
-        st.caption("One tap at a time is a mixed-integer problem, and a MILP has no "
-                   "multipliers: soe.m, v and the effective columns are not defined.")
+        st.caption(r"One tap at a time is a mixed-integer problem, and a MILP has no "
+                   r"multipliers: $\text{soe.m}_t$, $v_t$ and the effective columns "
+                   "are not defined.")
     else:
         tied = {}
         for t in range(T):
@@ -548,8 +579,8 @@ def render() -> None:
     if market_mode:
         st.button("Send these prices to price path mode", key="boc_send",
                   on_click=_send_to_price_path, args=(lam,))
-        st.caption("The probes run on the battery block priced at λ. Send this "
-                   "market's λ across and the battery sees the same prices.")
+        st.caption(r"The probes run on the battery block priced at $\lambda_t$. Send "
+                   r"this market's $\lambda_t$ across and the battery sees the same prices.")
     elif binary:
         st.caption("The probes need multipliers, so they run with the one-tap "
                    "toggle off.")
@@ -564,26 +595,28 @@ def render() -> None:
     lp_taps = both_taps(lp) if lp["ok"] else []
     if taps or lp_taps:
         items = "\n".join(
-            f"- t = {t + 1}: Pᶜʰ = {lp['Pch'][t]:.1f} MW and Pᵈⁱˢ = "
-            f"{lp['Pdis'][t]:.1f} MW. Energy destroyed: "
-            f"{bat['eta_c'] * lp['Pch'][t] * DT:.2f} − {lp['Pdis'][t] * DT / bat['eta_d']:.2f} "
-            f"= {bat['eta_c'] * lp['Pch'][t] * DT - lp['Pdis'][t] * DT / bat['eta_d']:.2f} MWh. "
-            f"Cash booked: {lam[t] * (lp['Pdis'][t] - lp['Pch'][t]) * DT:,.2f} $."
+            rf"- $t = {t + 1}$: $P^{{ch}}_t = {lp['Pch'][t]:.1f}$ MW and "
+            rf"$P^{{dis}}_t = {lp['Pdis'][t]:.1f}$ MW. Energy destroyed "
+            rf"$\eta^{{ch}} P^{{ch}}_t \Delta T - P^{{dis}}_t \Delta T / \eta^{{dis}} = "
+            rf"{bat['eta_c'] * lp['Pch'][t] * DT:.2f} - {lp['Pdis'][t] * DT / bat['eta_d']:.2f} "
+            rf"= {bat['eta_c'] * lp['Pch'][t] * DT - lp['Pdis'][t] * DT / bat['eta_d']:.2f}$ MWh. "
+            rf"Cash booked $\lambda_t (P^{{dis}}_t - P^{{ch}}_t) \Delta T = "
+            rf"{lam[t] * (lp['Pdis'][t] - lp['Pch'][t]) * DT:,.2f}$ \$."
             for t in lp_taps)
-        tail = (f"\n\nWith one tap enforced the declared surplus goes from "
-                f"{lp['surplus']:,.2f} $ to {r['surplus']:,.2f} $."
-                if binary else "\n\nTurn on **Enforce one tap at a time** above to add "
-                               "the binary uₜ.")
+        tail = ("With one tap enforced the declared surplus goes from "
+                rf"${lp['surplus']:,.2f}$ \$ to ${r['surplus']:,.2f}$ \$."
+                if binary else "Turn on **Enforce one tap at a time** above to add "
+                               r"the binary $u_t$.")
         ed.note("**Both taps open at once.**\n\n" + items +
                 "\n\nThe LP found a way to be paid for consuming energy without "
                 "storing it. The physics forbids charging and discharging at once; "
-                "the binary is the physics." + tail)
+                "the binary is the physics.\n\n" + tail)
 
     with st.expander("The formulation"):
         st.markdown("The SOE row, with multiplier $\\theta_t$, and the value of stored energy:")
         st.latex(r"E_t = E_{t-1} + \eta^{ch} P^{ch}_t \, \Delta T - \frac{P^{dis}_t \, \Delta T}{\eta^{dis}}, "
                  r"\qquad v_t = -\theta_t")
-        st.markdown("Price path mode, the battery block priced at $\\lambda$:")
+        st.markdown("Price path mode, the battery block priced at $\\lambda_t$:")
         st.latex(r"\min \sum_t \left[ (\lambda_t - b^{ch}) P^{ch}_t + (c^{dis} - \lambda_t) P^{dis}_t \right] \Delta T")
         st.markdown("Market mode, the operator's problem:")
         st.latex(r"\min \sum_t \Big[ \sum_k c_k P_{k,t} + c^{dis} P^{dis}_t - b^{ch} P^{ch}_t \Big] \Delta T")
@@ -599,14 +632,13 @@ def render() -> None:
 
 
 def _probes(lam, r, bat, e_end) -> None:
-    st.subheader("What is one megawatt-hour worth at t?")
-    left, right = st.columns([1, 2])
-    t = left.selectbox("Interval t", options=list(range(1, T + 1)),
-                       format_func=lambda i: f"t{i}", key="boc_probe_t") - 1
-    kind = right.radio("Probe", ["inject", "force"], key="boc_probe_kind", horizontal=True,
-                       format_func=lambda k: {
-                           "inject": "Add one megawatt-hour to the tank at t",
-                           "force": "Force one extra MW of discharge at t"}[k])
+    st.subheader("What is one megawatt-hour worth at $t$?")
+    t = st.radio("Interval", options=list(range(1, T + 1)), horizontal=True,
+                 format_func=lambda i: rf"$t = {i}$", key="boc_probe_t") - 1
+    kind = st.radio("Probe", ["inject", "force"], key="boc_probe_kind", horizontal=True,
+                    format_func=lambda k: {
+                        "inject": r"Add one megawatt-hour to the tank at $t$",
+                        "force": r"Force one extra MW of discharge, $P^{dis}_t + 1$"}[k])
     if kind == "inject":
         probe = battery_block(lam, bat, e_end=e_end, inject=(t, 1.0))
         if not probe["ok"]:
@@ -614,31 +646,31 @@ def _probes(lam, r, bat, e_end) -> None:
                     "room and no way to make any.")
             return
         delta = probe["surplus"] - r["surplus"]
-        st.markdown(f"Adding 1 MWh to the right-hand side of the SOE row at t = {t + 1} "
-                    f"changes the declared surplus by **{delta:+.2f} $**, and "
-                    f"$v_{{{t + 1}}} = {r['v'][t]:.2f}$. Same number, as it must be.")
+        st.markdown(rf"Adding $1$ MWh to the right-hand side of the SOE row at $t = {t + 1}$ "
+                    rf"changes the declared surplus by **${delta:+.2f}$ \$**, and "
+                    rf"$v_{{{t + 1}}} = {r['v'][t]:.2f}$. Same number, as it must be.")
         lines = _chain(r, probe, lam, bat)
         if r["E"][t] >= bat["E"] - EPS and r["Pch"][t] < EPS:
-            st.markdown(f"The tank is full at t = {t + 1} and nothing is being bought "
+            st.markdown(rf"The tank is full at $t = {t + 1}$ and nothing is being bought "
                         "there, so the extra megawatt-hour can only be sold now: "
-                        f"$(\\lambda_t - c^{{dis}}) \\, \\eta^{{dis}}$. The value of a "
-                        "bigger tank here is $v_{later} - v_{now}$.")
+                        r"$(\lambda_t - c^{dis}) \, \eta^{dis}$. The value of a "
+                        r"bigger tank here is $v_{later} - v_{now}$.")
         st.markdown("\n".join(lines) if lines else "- Nothing moves: the extra energy "
                                                     "sits in the tank unused.")
     else:
         probe = battery_block(lam, bat, e_end=e_end, force_dis=(t, r["Pdis"][t] + 1.0))
         if r["Pdis"][t] + 1.0 > bat["P"] + EPS or not probe["ok"]:
-            ed.note(f"One more MW of discharge at t = {t + 1} is not feasible: the "
+            ed.note(rf"One more MW of discharge at $t = {t + 1}$ is not feasible: the "
                     "tap is already at its limit or the tank cannot supply it.")
             return
         delta = probe["surplus"] - r["surplus"]
-        st.markdown(f"Fixing $P^{{dis}}_{{{t + 1}}}$ at {r['Pdis'][t]:.1f} + 1 MW changes "
-                    f"the declared surplus by **{delta:+.2f} $**.")
+        st.markdown(rf"Fixing $P^{{dis}}_{{{t + 1}}} = {r['Pdis'][t]:.1f} + 1$ MW changes "
+                    rf"the declared surplus by **${delta:+.2f}$ \$**.")
         lines = _chain(r, probe, lam, bat)
         st.markdown("\n".join(lines) if lines else "- Nothing else moves.")
         if abs(delta) < 0.005:
-            st.caption("The change is 0.00 $: the displaced interval has the same "
-                       "price as this one, so this probe is uninformative here. It "
+            st.caption(r"The change is $0.00$ \$: the displaced interval has the same "
+                       r"$\lambda$ as this one, so this probe is uninformative here. It "
                        "says something only when the prices differ.")
 
 
@@ -647,9 +679,9 @@ def _cash(lam, r, bat, baseline) -> None:
     ratio, threshold, passes = round_trip(lam, bat)
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        ed.headline("MWh bought", f"{r['bought']:,.2f}")
+        ed.headline(r"MWh bought, $\sum_t P^{ch}_t \Delta T$", f"{r['bought']:,.2f}")
     with c2:
-        ed.headline("MWh sold", f"{r['sold']:,.2f}")
+        ed.headline(r"MWh sold, $\sum_t P^{dis}_t \Delta T$", f"{r['sold']:,.2f}")
     with c3:
         ed.headline(r"Battery cash (\$)", ed.money(r["cash"]))
     with c4:
