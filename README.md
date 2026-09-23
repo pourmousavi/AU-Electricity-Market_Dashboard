@@ -2,7 +2,7 @@
 
 ELEC ENG 4087/7087, University of Adelaide.
 
-One public Streamlit site that presents **25 interactive experiments** drawn
+One public Streamlit site that presents **31 interactive experiments** drawn
 from **six pre-existing weekly dashboards**. Students get a card grid of
 topics; the coordinator turns individual experiments on as the course
 progresses, without a redeploy.
@@ -14,7 +14,7 @@ coordinator, and anonymous usage analytics in Neon Postgres.
 
 ## An experiment is a module
 
-Each of the 25 experiments is a Python module in `experiments/` exposing a
+Each of the 31 experiments is a Python module in `experiments/` exposing a
 single `render()` function that draws it. There is nothing to isolate at
 runtime: no monkeypatching of the shared `streamlit` module, no process-wide
 lock, no AST surgery. `hub/runner.py` just imports the module and calls
@@ -174,7 +174,7 @@ Two tests carry most of the weight:
   Read the resulting diff before committing: every line it changes is a line
   a student would have seen change. Note that refreshing replaces the
   pre-split record with current behaviour — the original stays in git history.
-* `tests/test_experiments_render.py` — imports and renders all 25 experiments
+* `tests/test_experiments_render.py` — imports and renders all 31 experiments
   and additionally asserts that none leaks a former sibling's content (the
   failure mode a shared `_kit` page or a copy-paste extraction mistake would
   produce).

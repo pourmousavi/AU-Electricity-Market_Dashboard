@@ -27,7 +27,7 @@ def _harness(exp_id: str) -> str:
 
 
 def test_catalogue_has_expected_size() -> None:
-    assert len(ALL_IDS) == 30
+    assert len(ALL_IDS) == 31
 
 
 @pytest.mark.parametrize("exp_id", ALL_IDS)
@@ -216,10 +216,10 @@ def test_state_groups_have_the_expected_members() -> None:
 
 
 def test_ungrouped_experiments_declare_no_state_group() -> None:
-    """The other 16 are their own group, they must not join one by accident."""
+    """The other 17 are their own group, they must not join one by accident."""
     grouped = {exp_id for ids in EXPECTED_GROUPS.values() for exp_id in ids}
     ungrouped = sorted(set(CATALOGUE) - grouped)
-    assert len(ungrouped) == 16, ungrouped
+    assert len(ungrouped) == 17, ungrouped
     for exp_id in ungrouped:
         module = importlib.import_module(f"experiments.{exp_id}")
         assert not hasattr(module, "STATE_GROUP"), (
