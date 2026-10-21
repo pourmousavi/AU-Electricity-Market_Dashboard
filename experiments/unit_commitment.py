@@ -825,9 +825,19 @@ def _case_b_limit() -> float:
 # --- The page ---------------------------------------------------------------
 
 PANELS = ("Schedule details", "Trip check", "Prices and settlement")
-DEFAULTS = {"uc_stage": 1, "uc_hbh": False, "uc_ut_g3": 3, "uc_panel": PANELS[0],
-            "uc_trip_hour": 7, "uc_trip_unit": "G1", "uc_net_hour": 7,
-            **{f"uc_trip_inc_{n}": True for n in (*UNITS, "BESS")}}
+DEFAULTS = {"uc_stage": 1, "uc_hbh": False, "uc_ut_g3": 3, "uc_panel": PANELS[0]}
+
+
+def _save(key: str) -> None:
+    st.session_state["uc_keep_" + key[3:]] = st.session_state[key]
+
+
+def _kept(key: str, default) -> dict:
+    """Widget kwargs for a widget drawn only inside one panel. Streamlit drops a widget's
+    state when it is not drawn, so the value is kept under a shadow key and written back
+    into the widget key just before the widget is drawn."""
+    st.session_state[key] = st.session_state.get("uc_keep_" + key[3:], default)
+    return dict(key=key, on_change=_save, args=(key,))
 
 
 def _step(delta: int) -> None:
@@ -934,8 +944,10 @@ def render() -> None:
         st.markdown(_grid_html(v, prev), unsafe_allow_html=True)
         compare = ("the look-ahead stage 1 schedule" if stage == 1
                    else f"stage {stage - 1}")
+        changed = (f" A cell with a purple outline and a ● changed from {compare}."
+                   if prev is not None else "")
         st.caption(rf"1 is on and 0 is off. ▲ marks a start ($y_{{k,t}} = 1$) and ▼ a shut-down "
-                   rf"($z_{{k,t}} = 1$). A cell with a purple outline and a ● changed from {compare}.")
+                   rf"($z_{{k,t}} = 1$).{changed}")
 
     # D. Dispatch.
     st.plotly_chart(_dispatch_figure(v), width="stretch")
@@ -961,7 +973,7 @@ def render() -> None:
             st.caption("Switch it on to see each hour decided on its own, with no look-ahead.")
 
     # H, I and the schedule tables, one panel at a time.
-    panel = st.radio("Panel", PANELS, horizontal=True, key="uc_panel")
+    panel = st.radio("Show", PANELS, horizontal=True, key="uc_panel")
     if panel == PANELS[0]:
         _details_panel(v, stage)
     elif panel == PANELS[1]:
@@ -969,8 +981,8 @@ def render() -> None:
     else:
         _prices_panel(stage, ut)
 
-    st.caption("Why the battery needs the mode binary $w_t$ is the Topic 6 battery opportunity "
-               "cost experiment.")
+    st.caption("Why the battery needs the mode binary $w_t$ is explained in the Topic 6 battery "
+               "opportunity cost experiment.")
 
 
 def _details_panel(v: dict, stage: int) -> None:
@@ -994,16 +1006,17 @@ def _trip_panel(v: dict, stage: int) -> None:
     st.subheader("Trip a unit")
     c1, c2 = st.columns(2)
     with c1:
-        hour = st.radio("Hour", list(HOURS), horizontal=True, key="uc_trip_hour")
+        hour = st.radio("Hour", list(HOURS), horizontal=True, **_kept("uc_trip_hour", 7))
     with c2:
-        unit = st.radio("Unit to trip", list(UNITS), horizontal=True, key="uc_trip_unit")
+        unit = st.radio("Unit to trip", list(UNITS), horizontal=True, **_kept("uc_trip_unit", "G1"))
     survivors = [j for j in UNITS if j != unit] + (["BESS"] if stage >= 3 else [])
     st.markdown("**What-if.** Untick a survivor to take it out of the count.")
     include = {}
     for column, name in zip(st.columns(5), (*UNITS, "BESS")):
         usable = name in survivors
-        label = "Battery" if name == "BESS" else name
-        include[name] = column.checkbox(label, key=f"uc_trip_inc_{name}", disabled=not usable)
+        label = ("Battery" if name == "BESS" else name) + (" (tripped)" if name == unit else "")
+        include[name] = column.checkbox(label, disabled=not usable,
+                                         **_kept(f"uc_trip_inc_{name}", True))
     t = trip(v, stage, hour, unit, include)
     if not t["committed"]:
         ed.note(f"**{unit} is not committed in hour {hour}, so nothing is lost.** Pick a "
@@ -1058,7 +1071,8 @@ def _prices_panel(stage: int, ut: int) -> None:
         return
     case = "Case A" if stage == 5 else "Case B"
     f23 = STAGES[stage - 1]["f23"]
-    hour = st.radio("Hour shown in the diagram", list(HOURS), horizontal=True, key="uc_net_hour")
+    hour = st.radio("Hour shown in the diagram", list(HOURS), horizontal=True,
+                    **_kept("uc_net_hour", 7))
     st.plotly_chart(_network_figure(v, p["lam"], hour, f23), width="stretch")
     st.caption("Arrows point the way the power actually flows. A thick purple line is at its "
                "rating and is labelled \"at rating\". Bus 3 is the reference.")
@@ -1069,7 +1083,7 @@ def _prices_panel(stage: int, ut: int) -> None:
         F = f23 if name == "2-3" else 1500.0
         rows.append([name, f"{a} to {b}", _n(f), _n(F),
                      "at rating" if abs(f) >= F - EPS else "below rating"])
-    st.markdown(_pipe_table(["Line", "From to", r"$f_{\ell,t}$ (MW)", r"$\bar{F}_\ell$ (MW)",
+    st.markdown(_pipe_table(["Line", "Positive direction", r"$f_{\ell,t}$ (MW)", r"$\bar{F}_\ell$ (MW)",
                              "Status"], rows))
     if stage == 6:
         limit = _case_b_limit()
@@ -1103,7 +1117,7 @@ def _prices_panel(stage: int, ut: int) -> None:
         [r"Consumers pay $\sum_{i,t} D_{i,t} \lambda_{i,t}$", _n(s["consumers"])],
         ["Congestion rent: consumers pay less generator and battery revenue", _n(s["rent"])],
         ["Total uplift", _n(s["uplift"])],
-        ["Total uplift as a share of the schedule cost", f"{100 * s['share']:.1f} %"],
+        ["Total uplift as a share of the schedule cost", f"{100 * s['share']:.1f}%"],
     ]))
     if stage == 5:
         st.caption("G3 and the battery are both at bus 3 and can shift up to 70 MW between hours "

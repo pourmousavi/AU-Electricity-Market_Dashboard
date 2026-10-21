@@ -295,3 +295,22 @@ def test_previous_and_next_buttons() -> None:
     assert app.session_state["uc_stage"] == 2
     app.button(key="uc_prev").click().run()
     assert app.session_state["uc_stage"] == 1
+
+
+def test_trip_choices_survive_a_panel_switch() -> None:
+    """The presenter sets up a trip, looks at another panel, and comes back."""
+    app = fresh()
+    radio(app, "uc_stage").set_value(4).run()
+    radio(app, "uc_panel").set_value(uc.PANELS[1]).run()
+    assert radio(app, "uc_trip_hour").value == 7
+    assert app.checkbox(key="uc_trip_inc_G4").value
+    radio(app, "uc_trip_hour").set_value(1)
+    radio(app, "uc_trip_unit").set_value("G2").run()
+    app.checkbox(key="uc_trip_inc_G4").uncheck().run()
+    radio(app, "uc_panel").set_value(uc.PANELS[0]).run()
+    radio(app, "uc_panel").set_value(uc.PANELS[1]).run()
+    clean(app)
+    assert radio(app, "uc_trip_hour").value == 1
+    assert radio(app, "uc_trip_unit").value == "G2"
+    assert not app.checkbox(key="uc_trip_inc_G4").value
+    assert any(m.value.startswith("**Fail.**") for m in app.markdown)
