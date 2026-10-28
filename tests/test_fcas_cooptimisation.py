@@ -3,6 +3,7 @@
 Every number here was checked against HiGHS through scipy. The solver functions
 are tested directly (no Streamlit), then the source guards, then the page.
 """
+import json
 import re
 from pathlib import Path
 
@@ -357,8 +358,10 @@ def test_every_mode_and_preset_renders() -> None:
     for preset in fc.RAISE_PRESETS:
         radio(app, "fc_raise_preset").set_value(preset).run()
         clean(app)
-        for method in fc.METHODS:
-            radio(app, "fc_method").set_value(method).run()
+        for m in fc.METHODS:
+            app.checkbox(key=f"fc_show_{m}").uncheck().run()
+            clean(app)
+            app.checkbox(key=f"fc_show_{m}").check().run()
             clean(app)
     go_mode(app, 1)
     for unit in fc.TRAP_PRESETS:
@@ -380,9 +383,9 @@ def test_mode_one_batteries(batt) -> None:
     app = fresh()
     app.slider(key="fc_batt").set_value(batt).run()
     clean(app)
-    for method in fc.METHODS:
-        radio(app, "fc_method").set_value(method).run()
-        clean(app)
+    body = texts(app)
+    for name in fc.METHOD_SHORT.values():
+        assert name in body
 
 
 def test_mode_one_default_numbers() -> None:
@@ -404,10 +407,10 @@ def test_mode_one_breakpoint_and_end_of_range() -> None:
 
 def test_mode_one_energy_first_failure_words() -> None:
     app = fresh()
-    radio(app, "fc_method").set_value("ef").run()
     app.slider(key="fc_R").set_value(250).run()
     clean(app)
     assert "cannot find 250 MW of raise in the headroom left after the energy market" in texts(app)
+    assert "Not drawn, because it cannot meet the requirement: energy first." in texts(app)
     assert "only 200 MW is left" in texts(app)
 
 
@@ -425,11 +428,13 @@ def test_preset_change_resets_the_knobs() -> None:
 def test_state_survives_a_mode_round_trip() -> None:
     app = fresh()
     app.slider(key="fc_R").set_value(200).run()
-    radio(app, "fc_method").set_value("rf").run()
+    app.checkbox(key="fc_show_rf").uncheck().run()
+    n = len(app.session_state["fc_trail_raise"])
     go_mode(app, 1)
     go_mode(app, 0)
     assert app.slider(key="fc_R").value == 200
-    assert radio(app, "fc_method").value == "rf"
+    assert app.checkbox(key="fc_show_rf").value is False
+    assert len(app.session_state["fc_trail_raise"]) == n
 
 
 def test_mode_two_regulation_moves_the_right_row() -> None:
@@ -476,11 +481,208 @@ def test_mode_three_and_four_numbers() -> None:
     assert "between 7 and 47" in [m.value for m in app.metric]
 
 
-def test_method_bars_show_ranges_at_a_breakpoint() -> None:
+def table(app, start: str) -> str:
+    """The markdown table that begins with `start`."""
+    return next(m.value for m in app.markdown if m.value.startswith(start))
+
+
+def test_method_table_shows_ranges_at_a_breakpoint() -> None:
     app = fresh()
     app.slider(key="fc_R").set_value(100).run()
     clean(app)
-    specs = [e.proto.spec for e in app.get("plotly_chart")]
-    method = next(sp for sp in specs if "Total cost of the three" in sp)
-    assert "between 40 and 60" in method and "between 4 and 24" in method
-    assert "between 1 and 4" in method  # reserve first
+    body = table(app, "| Method")
+    assert "between 40 and 60" in body and "between 4 and 24" in body
+    assert "between 1 and 4" in body  # reserve first
+
+
+# --- The trail and the method comparison ---------------------------------------
+
+def test_trail_push_dedupes_and_caps() -> None:
+    def e(k):
+        return dict(knobs=(k,))
+    t = fc.trail_push([], e(150))
+    assert len(fc.trail_push(t, e(150))) == 1
+    t = fc.trail_push(fc.trail_push(t, e(200)), e(150))
+    assert [x["n"] for x in t] == [1, 2, 3]
+    before = []
+    for k in range(14):
+        new = fc.trail_push(before, e(k))
+        assert new is not before
+        before = new
+    assert len(before) == 12 and [x["n"] for x in before] == list(range(3, 15))
+    snap = list(before)
+    fc.trail_push(before, e(99))
+    assert before == snap
+
+
+def test_trail_marks_merges_coincident_points() -> None:
+    got = fc.trail_marks([(2, 150, 24, "a", False), (3, 100, 4, "b", True),
+                          (5, 150.0000001, 24, "c", False)])
+    assert len(got) == 2
+    assert got[0][2] == "2, 5" and got[0][3] == "a<br>c"
+    assert got[1][2] == "3" and got[1][4] is True
+
+
+def test_method_costs_forum_150() -> None:
+    rows = {int(r[0]): r for r in fc.method_costs("forum", 0)}
+    assert rows[150][1:] == approx((23_600, 23_900, 25_300))
+    assert rows[250][2] is None
+
+
+def trail(app, name="raise"):
+    return app.session_state[f"fc_trail_{name}"]
+
+
+def test_three_methods_shown_at_150() -> None:
+    app = fresh()
+    assert not [r for r in app.radio if r.key == "fc_method"]
+    body = texts(app)
+    for cost in ("23 600", "23 900", "25 300"):
+        assert cost in body
+    assert all(app.checkbox(key=f"fc_show_{m}").value for m in fc.METHODS)
+
+
+def test_unticking_a_method_hides_it() -> None:
+    app = fresh()
+    app.checkbox(key="fc_show_ef").uncheck().run()
+    clean(app)
+    body = table(app, "| Method")
+    assert "23 900" not in body and "23 600" in body and "25 300" in body
+    assert "23 900" not in table(app, "| Run")
+    assert len(trail(app)) == 1
+    app.checkbox(key="fc_show_coopt").uncheck().run()
+    app.checkbox(key="fc_show_rf").uncheck().run()
+    clean(app)
+    assert "Tick at least one clearing method" in texts(app)
+    app.checkbox(key="fc_show_ef").check().run()
+    assert "23 900" in table(app, "| Method")
+
+
+def spec_of(app, title: str) -> dict:
+    for e in app.get("plotly_chart"):
+        if title in e.proto.spec:
+            return json.loads(e.proto.spec)
+    raise AssertionError(title)
+
+
+def earlier(spec: dict, name: str, yaxis: str = "y") -> dict:
+    return next(t for t in spec["data"] if t.get("name") == name
+                and (t.get("yaxis") or "y") == yaxis)
+
+
+def test_supply_curve_earlier_runs() -> None:
+    app = fresh()
+    app.slider(key="fc_R").set_value(50).run()
+    app.slider(key="fc_batt").set_value(100).run()
+    app.slider(key="fc_R").set_value(150).run()
+    app.slider(key="fc_batt").set_value(0).run()
+    clean(app)
+    assert [e["n"] for e in trail(app)] == [1, 2, 3, 4, 5]
+    spec = spec_of(app, "The reserve supply curve")
+    circles = earlier(spec, "earlier runs (number = run)")
+    assert circles["x"] == [150, 50] and circles["y"] == [24, 4]
+    assert circles["text"] == ["1", "2"] and circles["marker"]["symbol"] == "circle"
+    squares = earlier(spec, "earlier runs, other battery value")
+    assert squares["x"] == [50, 150] and squares["y"] == [1, 4]
+    assert squares["text"] == ["3", "4"] and squares["marker"]["symbol"] == "square"
+    lam = earlier(spec, "earlier runs (number = run)", "y2")
+    assert lam["y"] == [60, 40]
+
+
+def test_trail_records_slider_changes() -> None:
+    app = fresh()
+    assert len(trail(app)) == 1
+    app.slider(key="fc_R").set_value(100).run()
+    app.slider(key="fc_R").set_value(200).run()
+    clean(app)
+    assert [e["R"] for e in trail(app)] == [150, 100, 200]
+    assert [e["n"] for e in trail(app)] == [1, 2, 3]
+    app.run()
+    assert len(trail(app)) == 3
+    app.slider(key="fc_batt").set_value(100).run()
+    assert len(trail(app)) == 4
+
+
+def test_trail_resets_on_preset_change() -> None:
+    app = fresh()
+    app.slider(key="fc_R").set_value(100).run()
+    app.slider(key="fc_R").set_value(200).run()
+    radio(app, "fc_raise_preset").set_value("lecture").run()
+    clean(app)
+    assert [(e["R"], e["n"]) for e in trail(app)] == [(300, 1)]
+    radio(app, "fc_raise_preset").set_value("forum").run()
+    assert [(e["R"], e["n"]) for e in trail(app)] == [(150, 1)]
+
+
+def test_clear_history() -> None:
+    app = fresh()
+    app.slider(key="fc_R").set_value(100).run()
+    app.slider(key="fc_R").set_value(200).run()
+    app.button(key="fc_clear_raise").click().run()
+    clean(app)
+    assert len(trail(app)) == 1 and trail(app)[0]["n"] == 1 and trail(app)[0]["R"] == 200
+
+
+def test_mode_two_trail() -> None:
+    app = fresh()
+    go_mode(app, 1)
+    app.slider(key="fc_P").set_value(250).run()
+    app.slider(key="fc_P").set_value(130).run()
+    clean(app)
+    assert len(trail(app, "trap")) == 3
+    radio(app, "fc_service").set_value("Slow raise").run()
+    clean(app)
+    assert len(trail(app, "trap")) == 4
+    radio(app, "fc_trap_unit").set_value("battery").run()
+    clean(app)
+    t = trail(app, "trap")
+    assert len(t) == 1 and t[0]["P"] == -60
+
+
+def test_mode_three_and_four_trails() -> None:
+    app = fresh()
+    go_mode(app, 2)
+    app.slider(key="fc_Rm").set_value(40).run()
+    clean(app)
+    assert len(trail(app, "lower")) == 2
+    go_mode(app, 3)
+    app.slider(key="fc_RSA").set_value(40).run()
+    app.slider(key="fc_RSA").set_value(30).run()
+    clean(app)
+    assert len(trail(app, "gl")) == 3
+    assert "between 10 and 50" in table(app, "| Run")
+    app.button(key="fc_clear_gl").click().run()
+    clean(app)
+    assert len(trail(app, "gl")) == 1
+
+
+def test_clear_history_in_modes_two_and_three() -> None:
+    app = fresh()
+    go_mode(app, 1)
+    app.slider(key="fc_P").set_value(250).run()
+    app.slider(key="fc_P").set_value(130).run()
+    app.button(key="fc_clear_trap").click().run()
+    clean(app)
+    assert len(trail(app, "trap")) == 1 and trail(app, "trap")[0]["P"] == 130
+    go_mode(app, 2)
+    app.slider(key="fc_Rm").set_value(40).run()
+    app.button(key="fc_clear_lower").click().run()
+    clean(app)
+    assert len(trail(app, "lower")) == 1 and trail(app, "lower")[0]["Rm"] == 40
+
+
+def test_mode_two_other_regulation_follows_the_service() -> None:
+    app = fresh()
+    go_mode(app, 1)
+    radio(app, "fc_service").set_value("Fast lower").run()
+    app.slider(key="fc_g_raise").set_value(15).run()  # Fast lower does not see it
+    app.slider(key="fc_P").set_value(300).run()
+    clean(app)
+    spec = spec_of(app, "Fast lower: the trapezium")
+    assert not [t for t in spec["data"] if t.get("name") == "earlier runs, other regulation"]
+    circles = earlier(spec, "earlier runs (number = run)")
+    assert circles["text"] == ["2, 3"]
+    app.slider(key="fc_g_lower").set_value(15).run()  # now it does
+    spec = spec_of(app, "Fast lower: the trapezium")
+    squares = earlier(spec, "earlier runs, other regulation")
+    assert squares["marker"]["symbol"] == "square" and squares["text"] == ["2, 3", "4"]

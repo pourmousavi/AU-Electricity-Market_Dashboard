@@ -587,14 +587,15 @@ def trap_steps(t, P: float, g_raise: float, g_lower: float, service: str) -> lis
 # --- Formatting ---------------------------------------------------------------
 
 def _n(x: float) -> str:
-    """Two decimals, and no trailing .00 on an integer."""
+    """Two decimals, no trailing .00 on an integer, and a space between thousands."""
     s = f"{round(float(x), 2) + 0.0:,.2f}"
-    return s[:-3] if s.endswith(".00") else s
+    s = s[:-3] if s.endswith(".00") else s
+    return s.replace(",", " ")
 
 
 def _m(x: float) -> str:
-    """_n for maths: KaTeX spaces a bare comma."""
-    return _n(x).replace(",", "{,}")
+    """_n for maths: a thin space between thousands, which KaTeX renders."""
+    return _n(x).replace(" ", r"\,")
 
 
 def _p(x: float) -> str:
@@ -649,6 +650,57 @@ BEYOND_LAM = ("There is no feasible dispatch with 1 MW more demand, so the price
               "right-hand value.")
 
 
+# --- Trail and method comparison (pure) -------------------------------------
+
+TRAIL_CAP = 12
+METHOD_SHORT = {"coopt": "Co-optimised", "ef": "Energy first", "rf": "Reserve first"}
+
+
+def trail_push(trail: list, entry: dict, cap: int = TRAIL_CAP) -> list:
+    """A new list. Skip the entry if the last run had the same knobs; otherwise number
+    it (one more than the last run) and keep only the last `cap` runs."""
+    if trail and trail[-1]["knobs"] == entry["knobs"]:
+        return trail
+    n = trail[-1]["n"] + 1 if trail else 1
+    return (list(trail) + [{**entry, "n": n}])[-cap:]
+
+
+def trail_marks(points) -> list:
+    """points: (n, x, y, hover, other). Points at the same rounded (x, y) are merged so
+    their numbers read "2, 5". Runs on a different curve (`other`) are kept apart from runs
+    on the same curve, so a circle and a square never merge. Returns (x, y, label, hover, other) groups."""
+    groups: dict = {}
+    for n, x, y, hover, other in points:
+        g = groups.setdefault((round(float(x), 6), round(float(y), 6), bool(other)),
+                              dict(x=float(x), y=float(y), ns=[], hover=[], other=bool(other)))
+        g["ns"].append(n)
+        g["hover"].append(hover)
+    return [(g["x"], g["y"], ", ".join(str(n) for n in g["ns"]), "<br>".join(g["hover"]),
+             g["other"]) for g in groups.values()]
+
+
+def method_costs(preset: str, batt: float = 0.0, step: int = 10) -> list:
+    """(R, co-optimised, energy first, reserve first) total cost in $/h along the
+    requirement, with None where a method cannot meet it."""
+    p = RAISE_PRESETS[preset]
+    out = []
+    for R in range(0, int(p["R_max"]) + 1, step):
+        co = _raise_lp(p["units"], p["D"], float(R), float(batt))
+        ef = energy_first(preset, float(R), float(batt))
+        rf = reserve_first(preset, float(R), float(batt))
+        out.append((float(R),
+                    None if co is None else _z(co["cost"]),
+                    _z(ef["cost"]) if ef is not None and ef["feasible"] else None,
+                    _z(rf["cost"]) if rf is not None and rf["feasible"] else None))
+    return out
+
+
+def range_low(rng):
+    """Where a marker for a price range is drawn: the low end, or the high end if none."""
+    lo, hi = rng
+    return hi if lo is None else lo
+
+
 # ======================================================================
 # Charts
 # ======================================================================
@@ -667,12 +719,20 @@ def _pattern(colour, shape, fg=ed.NAVY):
                 pattern=dict(shape=shape, fgcolor=fg, bgcolor=colour, size=8))
 
 
+def _reserve_marker():
+    """Purple stripes on lavender, so numbers printed on the bar stay readable."""
+    return dict(color=ed.LAVENDER, line=dict(color=ed.NAVY, width=1.5),
+                pattern=dict(shape="/", fgcolor=ed.PURPLE, bgcolor=ed.LAVENDER, size=12,
+                             solidity=0.25))
+
+
 def _layout(fig, title, height=460, legend=True):
     fig.update_layout(
         title=dict(text=title, font=dict(size=20, color=ed.NAVY)),
         font=ed.CHART_FONT, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
         legend=dict(font=dict(size=14, color=ed.NAVY), orientation="h", y=-0.25),
         height=height, margin=dict(t=70, b=40, l=40, r=40), showlegend=legend,
+        separators=". ",
     )
 
 
@@ -696,43 +756,145 @@ def _vline(fig, x, colour, dash="dash", width=3, **kw):
     fig.add_vline(x=x, line=dict(color=colour, width=width, dash=dash), **kw)
 
 
-def _capacity_bars(preset, P, r, rB, batt) -> go.Figure:
+def _layout_narrow(fig, title, height, legend=True, legend_y=1.02, top=100):
+    """The layout for a chart in the right-hand column: a short title anchored top left,
+    the legend between the title and the plot, tight margins, and text that hides rather
+    than overflows. The top margin is the same whether or not a legend is showing, so a
+    chart does not jump when the first earlier run appears."""
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=17, color=ed.NAVY), x=0, xanchor="left",
+                   y=0.99, yanchor="top"),
+        font=ed.CHART_FONT, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
+        legend=dict(font=dict(size=13, color=ed.NAVY), orientation="h", y=legend_y,
+                    yanchor="bottom", x=0),
+        height=height, margin=dict(t=top, b=40, l=10, r=10),
+        showlegend=legend, uniformtext=dict(minsize=11, mode="hide"), separators=". ",
+    )
+    fig.update_xaxes(automargin=True)
+    fig.update_yaxes(automargin=True)
+
+
+def _trail_pos(y, yrange) -> str:
+    """Label below the marker, unless the marker is in the bottom tenth of the axis,
+    where the label would collide with the tick labels."""
+    if yrange is not None and yrange[1] > yrange[0] and (y - yrange[0]) / (yrange[1] - yrange[0]) < 0.1:
+        return "top center"
+    return "bottom center"
+
+
+def _add_trail(fig, groups, row=None, col=None, legend=True, labels=True,
+               other_name="earlier runs, other battery value", yrange=None) -> None:
+    """Earlier runs as faded, numbered markers. Circles are runs on the same curve;
+    squares (`other`) are runs on a different curve or shape. Neither is the current
+    diamond, and the number carries the meaning, not the colour."""
+    kw = dict(row=row, col=col) if row else {}
+    for is_other, name, symbol in ((False, "earlier runs (number = run)", "circle"),
+                                   (True, other_name, "square")):
+        g = [t for t in groups if bool(t[4]) == is_other]
+        if not g:
+            continue
+        fig.add_trace(go.Scatter(
+            x=[t[0] for t in g], y=[t[1] for t in g],
+            mode="markers+text" if labels else "markers", opacity=0.75, name=name,
+            legendgroup="trail_other" if is_other else "trail", showlegend=legend,
+            text=[t[2] for t in g] if labels else None,
+            textposition=[_trail_pos(t[1], yrange) for t in g],
+            textfont=dict(size=12, color=ed.MUTED), cliponaxis=False,
+            hovertext=[t[3] for t in g], hoverinfo="text",
+            marker=dict(size=11, symbol=symbol, color="#FFFFFF",
+                        line=dict(color=ed.MUTED, width=2))), **kw)
+
+
+def _dispatch_compare(preset, disp, batt, shown) -> go.Figure:
+    """Energy and reserve for each unit under each ticked method, grouped by unit."""
     units = RAISE_PRESETS[preset]["units"]
-    names = [_unit_label(u) for u in units]
-    energy = [float(v) for v in P]
-    res = [float(v) for v in r]
-    spare = [max(0.0, u["Pmax"] - P[k] - r[k]) for k, u in enumerate(units)]
+    outer, inner, energy, res, spare = [], [], [], [], []
+    for k, u in enumerate(units):
+        label = _unit_label(u) + (f", min {_mw(u['Pmin'])} MW" if u["Pmin"] > 0 else "")
+        for m in shown:
+            z = disp.get(m)
+            if z is None:
+                continue
+            outer.append(label)
+            inner.append(METHOD_SHORT[m])
+            energy.append(float(z["P"][k]))
+            res.append(float(z["r"][k]))
+            spare.append(max(0.0, u["Pmax"] - z["P"][k] - z["r"][k]))
     if batt > 0:
-        names.append("Battery (idle)")
-        energy.append(0.0)
-        res.append(float(rB))
-        spare.append(max(0.0, batt - rB))
+        for m in shown:
+            z = disp.get(m)
+            if z is None:
+                continue
+            outer.append("Battery (idle)")
+            inner.append(METHOD_SHORT[m])
+            energy.append(0.0)
+            res.append(float(z["rB"]))
+            spare.append(max(0.0, batt - z["rB"]))
 
     def lab(vals, prefix=""):
-        return [f"{prefix}{_mw(v)} MW" if v > EPS else "" for v in vals]
+        return [f"{prefix}{_mw(v)}" if v > EPS else "" for v in vals]
 
+    y = [outer, inner]
     fig = go.Figure()
-    fig.add_trace(go.Bar(y=names, x=energy, orientation="h", name="Energy P<sub>k</sub>",
+    fig.add_trace(go.Bar(y=y, x=energy, orientation="h", name="Energy P<sub>k</sub>",
                          marker=_pattern(ed.NAVY, ""), text=lab(energy), textposition="inside",
-                         insidetextanchor="middle", textfont=dict(size=15, color="#FFFFFF")))
-    fig.add_trace(go.Bar(y=names, x=res, orientation="h", name="Reserve r<sup>+</sup><sub>k</sub> (hatched)",
-                         marker=_pattern(RESERVE_FILL, "/", fg=ed.LAVENDER), text=lab(res),
+                         insidetextanchor="middle", textfont=dict(size=13, color="#FFFFFF")))
+    fig.add_trace(go.Bar(y=y, x=res, orientation="h", name="Reserve r<sup>+</sup><sub>k</sub> (hatched)",
+                         marker=_reserve_marker(), text=lab(res),
                          textposition="inside", insidetextanchor="middle",
-                         textfont=dict(size=15, color=ed.NAVY)))
-    fig.add_trace(go.Bar(y=names, x=spare, orientation="h", name="Spare capacity",
+                         textfont=dict(size=14, weight="bold", color=ed.NAVY), textangle=0))
+    fig.add_trace(go.Bar(y=y, x=spare, orientation="h", name="Spare capacity",
                          marker=dict(color="#FFFFFF", line=dict(color=ed.NAVY, width=2)),
                          text=lab(spare, "spare "), textposition="inside",
-                         insidetextanchor="middle", textfont=dict(size=14, color=ed.NAVY)))
-    for i, u in enumerate(units):
-        if u["Pmin"] > 0:
-            fig.add_shape(type="line", x0=u["Pmin"], x1=u["Pmin"], y0=i - 0.45, y1=i + 0.45,
-                          line=dict(color=ed.PURPLE, width=4))
-            fig.add_annotation(x=u["Pmin"], y=i - 0.45, text="min", showarrow=False,
-                               yanchor="bottom", font=dict(size=14, color=ed.NAVY))
-    fig.update_layout(barmode="stack", bargap=0.3)
+                         insidetextanchor="middle", textfont=dict(size=12, color=ed.NAVY)))
+    fig.update_layout(barmode="stack", bargap=0.25)
     fig.update_yaxes(autorange="reversed")
     _axes(fig, "capacity (MW)", "")
-    _layout(fig, "Each MW of capacity is sold once: as energy or as reserve", height=120 + 90 * len(names))
+    _layout_narrow(fig, "Each MW of capacity is sold once: as energy or as reserve",
+                   height=max(260, 150 + 34 * len(inner)))
+    fig.update_layout(legend=dict(traceorder="normal"))
+    return fig
+
+
+METHOD_STYLE = {"coopt": (ed.NAVY, "solid", "circle"), "ef": (ed.PURPLE, "dash", "square"),
+                "rf": (ed.MUTED, "dot", "triangle-up")}
+
+
+def _cost_curves(preset, batt, R, shown, trail, mcosts, current) -> go.Figure:
+    """Total cost against the requirement, one line per ticked method. Each line has its
+    own dash and marker shape. Earlier runs (same battery value) sit on the lines."""
+    fig = go.Figure()
+    col = {"coopt": 1, "ef": 2, "rf": 3}
+    for m in shown:
+        colour, dash, symbol = METHOD_STYLE[m]
+        fig.add_trace(go.Scatter(
+            x=[t[0] for t in mcosts], y=[t[col[m]] for t in mcosts], mode="lines+markers",
+            name=METHOD_SHORT[m], connectgaps=False,
+            line=dict(color=colour, width=3, dash=dash),
+            marker=dict(size=6, symbol=symbol, color=colour)))
+    first = True
+    vals = [t[col[m]] for t in mcosts for m in shown if t[col[m]] is not None]
+    yr = (min(vals), max(vals)) if vals else None
+    for m in shown:
+        pts = [(e["n"], e["R"], e[m]["cost"],
+                f"run {e['n']}: R⁺ {_sp(e['R'])} MW, {METHOD_SHORT[m]} {_sp(e[m]['cost'])} $/h", False)
+               for e in trail[:-1] if e["batt"] == batt and e[m]["ok"]]
+        if pts:
+            _add_trail(fig, trail_marks(pts), legend=first, labels=first, yrange=yr)
+            first = False
+    _vline(fig, R, ed.PURPLE, annotation_text=f"R<sup>+</sup> = {_sp(R)} MW",
+           annotation_position="top left" if R > 0.6 * RAISE_PRESETS[preset]["R_max"]
+           else "top right", annotation_font=dict(size=14, color=ed.NAVY))
+    for m in shown:
+        if current.get(m) is None:
+            continue
+        fig.add_trace(go.Scatter(
+            x=[R], y=[current[m]], mode="markers", showlegend=False, hoverinfo="skip",
+            marker=dict(size=14, symbol="diamond", color="#FFFFFF", line=dict(color=ed.NAVY, width=3))))
+    _axes(fig, "reserve requirement R<sup>+</sup> (MW)", "total cost ($/h)")
+    fig.update_yaxes(tickformat=",")
+    fig.update_xaxes(range=[0, RAISE_PRESETS[preset]["R_max"] * 1.02])
+    _layout_narrow(fig, "Total cost against the requirement", height=380)
     return fig
 
 
@@ -772,9 +934,10 @@ def _full_cost_bars(rows, pi_rng) -> go.Figure:
     return fig
 
 
-def _supply_curve(preset, batt, R, steps, mark_pi, mark_lam, pi_text, lam_text) -> go.Figure:
+def _supply_curve(preset, batt, R, steps, mark_pi, mark_lam, pi_text, lam_text,
+                  trail=None) -> go.Figure:
     R_max = RAISE_PRESETS[preset]["R_max"]
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.14,
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.2,
                         subplot_titles=(f"Reserve price {PI}<sup>+</sup> ($/MW/h)",
                                         f"Energy price {LAMBDA} ($/MWh)"))
     fig.update_annotations(font=dict(size=16, color=ed.NAVY))
@@ -791,56 +954,31 @@ def _supply_curve(preset, batt, R, steps, mark_pi, mark_lam, pi_text, lam_text) 
     xs, ys = _step_xy(steps, 3)
     fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=f"energy price {LAMBDA}",
                              line=dict(color=ed.NAVY, width=4)), row=2, col=1)
-    pos = "top left" if R > 0.6 * R_max else "top right"
+    top = max([s[2] for s in steps] + [p for _, _, p in stack] + [mark_pi]) * 1.3
+    lam_top = max([s[3] for s in steps] + [mark_lam]) * 1.6
+    if trail:
+        _add_trail(fig, trail["pi"], 1, 1, yrange=(0, top))
+        _add_trail(fig, trail["lam"], 2, 1, legend=False, yrange=(0, lam_top))
+    left = R > 0.6 * R_max
     for row, y, text in ((1, mark_pi, pi_text), (2, mark_lam, lam_text)):
         _vline(fig, R, ed.PURPLE, row=row, col=1)
         fig.add_trace(go.Scatter(
-            x=[R], y=[y], mode="markers+text", showlegend=False, hoverinfo="skip",
-            text=[text], textposition=pos, textfont=dict(size=15, color=ed.NAVY),
+            x=[R], y=[y], mode="markers", showlegend=False, hoverinfo="skip",
             marker=dict(size=15, symbol="diamond", color="#FFFFFF",
                         line=dict(color=ed.NAVY, width=3))), row=row, col=1)
+        # No background box: it would hide a step line and fake a gap in the curve.
+        fig.add_annotation(x=R, y=y, text=text, showarrow=False, row=row, col=1,
+                           xanchor="right" if left else "left", xshift=-14 if left else 14,
+                           yanchor="bottom", yshift=20,
+                           font=dict(size=14, color=ed.NAVY))
     fig.update_xaxes(tickfont=ed.TICK_FONT, gridcolor=ed.SILVER, range=[0, R_max * 1.02])
     fig.update_xaxes(title=dict(text="reserve requirement R<sup>+</sup> (MW)", font=ed.CHART_FONT),
                      row=2, col=1)
     fig.update_yaxes(tickfont=ed.TICK_FONT, gridcolor=ed.SILVER, rangemode="tozero")
-    top = max([s[2] for s in steps] + [p for _, _, p in stack] + [mark_pi]) * 1.3
     fig.update_yaxes(range=[0, top], row=1, col=1)
-    lam_top = max([s[3] for s in steps] + [mark_lam]) * 1.3
     fig.update_yaxes(range=[0, lam_top], row=2, col=1)
-    _layout(fig, "The reserve supply curve and the energy price it moves", height=720)
-    return fig
-
-
-def _method_bars(results: dict, selected: str, R, batt) -> go.Figure:
-    keys = list(METHODS)
-    labels, costs, texts, widths, lines = [], [], [], [], []
-    for k in keys:
-        z = results[k]
-        sel = k == selected
-        tick = METHODS[k]
-        if z is None or not z.get("feasible", True):
-            costs.append(0.0)
-            texts.append("cannot meet the requirement")
-            tick += "<br>no feasible result"
-        else:
-            costs.append(float(z["cost"]))
-            texts.append(f"<b>{_sp(z['cost'])} $/h</b>")
-            tick += (f"<br>{_sp(z['cost'] / 12)} $ per interval (1/12)"
-                     f"<br>{LAMBDA} {fmt_price(z['lam_range'], '')[0]}, "
-                     f"{PI}<sup>+</sup> {fmt_price(z['pi_range'], '')[0]}")
-        if sel:
-            tick += "<br><b>selected</b>"
-        labels.append(tick)
-        widths.append(7 if sel else 1.5)
-        lines.append(ed.PURPLE if sel else ed.NAVY)
-    fig = go.Figure(go.Bar(x=labels, y=costs, text=texts, textposition="outside",
-                           textfont=dict(size=16, color=ed.NAVY), cliponaxis=False,
-                           marker=dict(color=ed.LAVENDER, line=dict(color=lines, width=widths))))
-    fig.update_layout(bargap=0.4)
-    _axes(fig, "", "total cost ($/h)")
-    fig.update_yaxes(range=[0, max(costs + [1.0]) * 1.2], tickformat=",")
-    _layout(fig, f"Total cost of the three clearing methods at R<sup>+</sup> = {_sp(R)} MW",
-            height=500, legend=False)
+    _layout_narrow(fig, "The reserve supply curve and the energy price", height=520,
+                   legend_y=1.12, top=120)
     return fig
 
 
@@ -857,7 +995,7 @@ def _tick_labels(values: list, names: list):
     return list(grouped), [f"{', '.join(ns)} = {_mw(v)}" for v, ns in grouped.items()]
 
 
-def _trapezium(t, P, gr, gl, service, avail, side, xrange) -> go.Figure:
+def _trapezium(t, P, gr, gl, service, avail, side, xrange, trail=None) -> go.Figure:
     Emin, Blo, Bhi, Emax, A = t
     US, LS = slopes(t)
     g_r, g_l = effective_g(service, gr, gl)
@@ -901,20 +1039,25 @@ def _trapezium(t, P, gr, gl, service, avail, side, xrange) -> go.Figure:
                               if name == binding else {}), **offsets[name])
     fig.add_shape(type="line", xref="x", yref="paper", x0=P, x1=P, y0=0, y1=1,
                   line=dict(color=ed.NAVY, width=2, dash="dashdot"))
-    fig.add_annotation(x=P, y=1.0, yref="paper", text=f"energy target P<sub>k</sub> = {_mw(P)} MW",
-                       showarrow=False, yanchor="bottom", font=dict(size=14, color=ed.NAVY))
     mid = (Emin + Emax) / 2
+    fig.add_annotation(x=P, y=0.98, yref="paper", text=f"energy target P<sub>k</sub> = {_mw(P)} MW",
+                       showarrow=False, yanchor="top", xanchor="left" if P < mid else "right",
+                       xshift=6 if P < mid else -6, font=dict(size=14, color=ed.NAVY))
+    if trail:
+        _add_trail(fig, trail, other_name="earlier runs, other regulation",
+                   yrange=(-0.04 * A, A * 1.4))
     fig.add_trace(go.Scatter(
         x=[P], y=[avail], mode="markers+text", showlegend=False, hoverinfo="skip",
-        text=[f"available: {_mw(avail)} MW"], textposition="middle right" if P < mid else "middle left",
+        text=[f"available: {_mw(avail)} MW"],
+        textposition=("top " if avail < 0.15 * A else "bottom ") + ("right" if P < mid else "left"),
         textfont=dict(size=16, color=ed.NAVY),
         marker=dict(size=16, symbol="diamond", color="#FFFFFF", line=dict(color=ed.NAVY, width=3))))
     tv, tt = _tick_labels([Emin, Blo, Bhi, Emax], ["E<sup>min</sup>", "B<sup>lo</sup>", "B<sup>hi</sup>", "E<sup>max</sup>"])
     _axes(fig, "energy target (MW)", "FCAS (MW)")
-    pad = 0.05 * (xrange[1] - xrange[0])
+    pad = 0.15 * (xrange[1] - xrange[0])
     fig.update_xaxes(tickvals=tv, ticktext=tt, range=[xrange[0] - pad, xrange[1] + pad])
     fig.update_yaxes(tickvals=[0, A], ticktext=["0", f"A = {_mw(A)}"], range=[-0.04 * A, A * 1.4])
-    _layout(fig, f"{service}: the trapezium", height=480, legend=False)
+    _layout_narrow(fig, f"{service}: the trapezium", height=460)
     return fig
 
 
@@ -951,7 +1094,8 @@ def _trap_multiples(preset, P, gr, gl) -> go.Figure:
     fig.update_xaxes(tickfont=dict(size=12, color=ed.NAVY), gridcolor=ed.SILVER, nticks=4)
     fig.update_yaxes(tickfont=dict(size=12, color=ed.NAVY), gridcolor=ed.SILVER, rangemode="tozero")
     fig.update_layout(font=ed.CHART_FONT, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
-                      height=250 * len(grid) + 90, margin=dict(t=70, b=30, l=40, r=20))
+                      height=250 * len(grid) + 90, margin=dict(t=70, b=30, l=40, r=20),
+                      separators=". ")
     return fig
 
 
@@ -968,7 +1112,7 @@ def _lower_bars(preset, s) -> go.Figure:
                          textposition="inside", insidetextanchor="middle",
                          textfont=dict(size=14, color=ed.NAVY)))
     fig.add_trace(go.Bar(y=names, x=room, orientation="h", name="Lower room P<sub>k</sub> − min (hatched)",
-                         marker=_pattern(RESERVE_FILL, "/", fg=ed.LAVENDER),
+                         marker=_reserve_marker(),
                          text=[f"{_mw(v)} MW" if v > EPS else "" for v in room],
                          textposition="inside", insidetextanchor="middle",
                          textfont=dict(size=14, color=ed.NAVY)))
@@ -980,17 +1124,19 @@ def _lower_bars(preset, s) -> go.Figure:
     fig.update_yaxes(autorange="reversed")
     _axes(fig, "output (MW)", "")
     fig.update_xaxes(range=[0, max(P) * 2.3])
-    _layout(fig, "Each unit: its minimum, its output and the room it can lower into",
-            height=130 + 80 * len(units))
+    _layout_narrow(fig, "Each unit: its minimum, its output and the lower room",
+                   height=170 + 80 * len(units))
     return fig
 
 
-def _lower_steps(steps, Rm, mark_pi, text) -> go.Figure:
+def _lower_steps(steps, Rm, mark_pi, text, trail=None) -> go.Figure:
     xs, ys = _step_xy(steps, 2)
     fig = go.Figure(go.Scatter(x=xs, y=ys, mode="lines", name=f"lower price {PI}<sup>−</sup>",
                                line=dict(color=ed.NAVY, width=4)))
     _vline(fig, Rm, ed.PURPLE)
     top = max(ys + [mark_pi]) * 1.3
+    if trail:
+        _add_trail(fig, trail, yrange=(0, top))
     fig.add_trace(go.Scatter(
         x=[Rm], y=[mark_pi], mode="markers+text", showlegend=False, hoverinfo="skip",
         text=[text], textposition="top left" if Rm > 0.6 * steps[-1][1] else "top right",
@@ -998,11 +1144,11 @@ def _lower_steps(steps, Rm, mark_pi, text) -> go.Figure:
         marker=dict(size=15, symbol="diamond", color="#FFFFFF", line=dict(color=ed.NAVY, width=3))))
     _axes(fig, "lower requirement R<sup>−</sup> (MW)", f"{PI}<sup>−</sup> ($/MW/h)")
     fig.update_yaxes(range=[0, top])
-    _layout(fig, f"The lower price {PI}<sup>−</sup> against the requirement", height=420, legend=False)
+    _layout_narrow(fig, f"The lower price {PI}<sup>−</sup> against the requirement", height=400)
     return fig
 
 
-def _sa_curve(R_SA, piG, piSA_text) -> go.Figure:
+def _sa_curve(R_SA, piG, piSA_text, trail=None) -> go.Figure:
     sa = sorted((q for q in LOCAL["providers"] if q["region"] == "SA"), key=lambda q: q["price"])
     xs, ys, cum = [0.0], [sa[0]["price"]], 0.0
     for q in sa:
@@ -1016,6 +1162,8 @@ def _sa_curve(R_SA, piG, piSA_text) -> go.Figure:
     fig.add_hline(y=piG, line=dict(color=ed.NAVY, width=3, dash="dash"))
     fig.add_annotation(x=cum, y=piG, xanchor="right", yanchor="bottom", showarrow=False,
                        text=f"global price {PI}<sup>G</sup> = {_n(piG)}", font=dict(size=14, color=ed.NAVY))
+    if trail:
+        _add_trail(fig, trail, yrange=(0, max(ys) * 1.3))
     fig.add_trace(go.Scatter(
         x=[R_SA], y=[sa_stack_price(R_SA)], mode="markers+text", showlegend=False, hoverinfo="skip",
         text=[f"R<sup>SA</sup> = {_mw(R_SA)} MW"], textposition="top left" if R_SA > 60 else "top right",
@@ -1024,7 +1172,7 @@ def _sa_curve(R_SA, piG, piSA_text) -> go.Figure:
     _axes(fig, "South Australian local requirement R<sup>SA</sup> (MW)", "offer ($/MW/h)")
     fig.update_xaxes(range=[0, cum * 1.05])
     fig.update_yaxes(range=[0, max(ys) * 1.3])
-    _layout(fig, "South Australia's local supply curve", height=420, legend=False)
+    _layout_narrow(fig, "South Australia's local supply curve", height=420)
     return fig
 
 
@@ -1045,6 +1193,11 @@ def _ef(preset: str, R: int, batt: int):
 @st.cache_data(show_spinner=False)
 def _rf(preset: str, R: int, batt: int):
     return _plain(rf_full(preset, float(R), float(batt)))
+
+
+@st.cache_data(show_spinner=False)
+def _mcosts(preset: str, batt: int):
+    return method_costs(preset, float(batt))
 
 
 @st.cache_data(show_spinner=False)
@@ -1185,35 +1338,173 @@ def _show_price(label, rng, beyond, setter):
         st.markdown(setter)
 
 
+
+
+# --- The trail: every knob change is recorded, earlier runs stay visible -------
+
+def _trail(name: str, ctx, entry: dict) -> list:
+    """Record this run and return the trail. The trail restarts when the context (the
+    preset or unit, which changes the data) changes. These are plain session keys, not
+    widget keys, so they survive a mode switch. The lists are created here, not in
+    DEFAULTS, so no two sessions share one."""
+    ss = st.session_state
+    tk, ck = f"fc_trail_{name}", f"fc_trail_{name}_ctx"
+    if ss.get(ck) != ctx:
+        ss[tk] = []
+        ss[ck] = ctx
+    ss[tk] = trail_push(ss.get(tk, []), entry)
+    return ss[tk]
+
+
+def _clear_trail(name: str) -> None:
+    st.session_state[f"fc_trail_{name}"] = []
+
+
+def _clear_button(name: str, trail: list) -> None:
+    st.button("Clear history", key=f"fc_clear_{name}", on_click=_clear_trail, args=(name,))
+    st.caption(f"Run {trail[-1]['n']} recorded; the last {TRAIL_CAP} runs are kept.")
+
+
+def _runs_table(head: list, rows: list) -> None:
+    """The runs so far, oldest first, with the current (last) run in bold."""
+    body = [[f"**{c}**" for c in r] if i == len(rows) - 1 else r for i, r in enumerate(rows)]
+    st.markdown(_pipe_table(head, body))
+
+
 # --- Mode 1 -----------------------------------------------------------------
 
 def _raise_page() -> None:
     ss = st.session_state
-    st.radio("Preset", list(RAISE_PRESETS), horizontal=True,
-             format_func=lambda k: RAISE_PRESETS[k]["label"],
-             **_kept("fc_raise_preset", "forum", options=list(RAISE_PRESETS), then=_reset_raise))
-    preset = ss["fc_raise_preset"]
-    p = RAISE_PRESETS[preset]
+    left, right = st.columns([1, 2.4], gap="large")
+    with left:
+        st.radio("Preset", list(RAISE_PRESETS), horizontal=False,
+                 format_func=lambda k: RAISE_PRESETS[k]["label"],
+                 **_kept("fc_raise_preset", "forum", options=list(RAISE_PRESETS),
+                         then=_reset_raise))
+        preset = ss["fc_raise_preset"]
+        p = RAISE_PRESETS[preset]
+        R = int(st.slider(r"Contingency raise requirement $R^{+}$ (MW)", 0, int(p["R_max"]),
+                          step=10, **_kept("fc_R", int(p["R_default"]), 0, int(p["R_max"]))))
+        bmax = BATT_MAX[preset]
+        batt = int(st.slider(r"Idle battery offering raise at 1 \$/MW/h (MW of raise)", 0, bmax,
+                             step=50, **_kept("fc_batt", 0, 0, bmax)))
+        st.caption("An idle battery's headroom displaces no energy sale, so its reserve costs "
+                   "only its offer.")
+
     units, D = p["units"], p["D"]
+    co = _coopt(preset, R, batt)
+    if co is None:
+        with right:
+            ed.note(f"**No feasible dispatch.** The requirement of {_sp(R)} MW cannot be met.")
+        return
+    ef = _ef(preset, R, batt)
+    rf = _rf(preset, R, batt)
+    ef_ok = ef["res"] is not None and ef["res"]["feasible"]
+    rf_ok = rf["res"] is not None and rf["res"]["feasible"]
+    ef_msg = (f"**Energy first cannot meet the requirement.** Energy first cannot find {_sp(R)} MW "
+              f"of raise in the headroom left after the energy market (only {_sp(ef['headroom'])} "
+              "MW is left).")
+    rf_msg = ("**Reserve first cannot meet the requirement.** With the reserve held back, "
+              "energy cannot meet demand.")
+    results = {
+        "coopt": dict(ok=True, lam_rng=co["lam_range"], pi_rng=co["pi_range"], cost=co["cost"]),
+        "ef": dict(ok=ef_ok, lam_rng=ef["lam_range"],
+                   pi_rng=ef["res"]["pi_range"] if ef_ok else None,
+                   cost=ef["res"]["cost"] if ef_ok else None),
+        "rf": dict(ok=rf_ok, lam_rng=rf["lam_range"] if rf_ok else None,
+                   pi_rng=rf["pi_range"] if rf_ok else None,
+                   cost=rf["res"]["cost"] if rf_ok else None),
+    }
+    # The run is recorded once per render, before any chart or table is drawn.
+    trail = _trail("raise", preset, dict(knobs=(R, batt), R=R, batt=batt, **results))
 
-    head = ["Unit", r"$c_k$ (\$/MWh)", r"$\underline{P}_k$ (MW)", r"$\bar{P}_k$ (MW)",
-            r"$RR_k$ (MW)", r"$c^{+}_k$ (\$/MW/h)"]
-    rows = [[_unit_label(u), _n(u["c"]), _n(u["Pmin"]), _n(u["Pmax"]), _n(u["RR"]), _n(u["cp"])]
-            for u in units]
-    st.markdown(_pipe_table(head, rows))
-    st.markdown(f"Demand $D$ = {_sp(D)} MW. One five-minute interval, copper plate.")
+    with left:
+        lam_set = lam_setter(preset, co, batt)
+        pi_set = pi_setter(preset, co, batt)
+        _show_price(r"Energy price $\lambda$ (\$/MWh)", co["lam_range"], BEYOND_LAM,
+                    f"The energy price is {lam_set}." if lam_set else None)
+        _show_price(r"Reserve price $\pi^{+}$ (\$/MW/h)", co["pi_range"], _beyond_pi(R),
+                    f"The reserve price is {pi_set}." if pi_set else None)
+        st.markdown("**Clearing methods to compare**")
+        for m in METHODS:
+            st.checkbox(METHODS[m], **_kept(f"fc_show_{m}", True))
+        shown = [m for m in METHODS if ss[f"fc_show_{m}"]]
+        _clear_button("raise", trail)
 
-    R = int(st.slider(r"Contingency raise requirement $R^{+}$ (MW)", 0, int(p["R_max"]), step=10,
-                      **_kept("fc_R", int(p["R_default"]), 0, int(p["R_max"]))))
-    method = st.radio("Clearing method", list(METHODS), horizontal=True,
-                      format_func=lambda k: METHODS[k],
-                      **_kept("fc_method", "coopt", options=list(METHODS)))
-    bmax = BATT_MAX[preset]
-    batt = int(st.slider(r"Idle battery offering raise at 1 \$/MW/h (MW of raise)", 0, bmax, step=50,
-                         **_kept("fc_batt", 0, 0, bmax)))
-    st.caption("An idle battery's headroom displaces no energy sale, so its reserve costs only its offer.")
+    with right:
+        # The supply curve, with earlier runs as numbered markers.
+        pi_pts, lam_pts = [], []
+        for e in trail[:-1]:
+            c = e["coopt"]
+            other = e["batt"] != batt
+            where = f"run {e['n']}: R⁺ {_sp(e['R'])} MW, battery {_sp(e['batt'])} MW"
+            pi_pts.append((e["n"], e["R"], range_low(c["pi_rng"]),
+                           f"{where}, π⁺ {fmt_price(c['pi_rng'], '')[0]}", other))
+            lam_pts.append((e["n"], e["R"], range_low(c["lam_rng"]),
+                            f"{where}, λ {fmt_price(c['lam_rng'], '')[0]}", other))
+        pl, ph = co["pi_range"]
+        ll, lh = co["lam_range"]
+        pi_text = f"R<sup>+</sup> = {_sp(R)} MW: {PI}<sup>+</sup> {fmt_price(co['pi_range'], '')[0]}"
+        lam_text = f"R<sup>+</sup> = {_sp(R)} MW: {LAMBDA} {fmt_price(co['lam_range'], '')[0]}"
+        st.plotly_chart(_supply_curve(preset, batt, R, _steps(preset, batt), pl, ll, pi_text,
+                                      lam_text, trail=dict(pi=trail_marks(pi_pts),
+                                                           lam=trail_marks(lam_pts))),
+                        width="stretch")
+        st.caption("The reserve supply curve is not the offer stack: a unit's full cost of "
+                   "reserve includes the energy margin it gives up, so the cheapest offer is "
+                   "not always the cheapest reserve.")
 
-    with st.expander("The LP and its multipliers", expanded=True):
+        st.subheader(f"Three clearing methods at R⁺ = {_sp(R)} MW")
+        if not shown:
+            st.markdown("Tick at least one clearing method to compare them.")
+        else:
+            _method_table(results, shown)
+            if "ef" in shown and not ef_ok:
+                st.markdown(ef_msg)
+            if "rf" in shown and not rf_ok:
+                st.markdown(rf_msg)
+            st.caption("Each sequential market sees only one product at a time, so it can only "
+                       "cost the same or more.")
+            disp = {"coopt": co, "ef": ef["res"] if ef_ok else None,
+                    "rf": rf["res"] if rf_ok else None}
+            if any(disp[m] is not None for m in shown):
+                st.plotly_chart(_dispatch_compare(preset, disp, batt, shown), width="stretch")
+            missing = [METHOD_SHORT[m] for m in shown if disp[m] is None]
+            if missing:
+                st.caption(f"Not drawn, because it cannot meet the requirement: "
+                           f"{', '.join(missing).lower()}.")
+            current = {m: results[m]["cost"] for m in shown}
+            st.plotly_chart(_cost_curves(preset, batt, R, shown, trail, _mcosts(preset, batt),
+                                         current), width="stretch")
+
+    # Runs so far, full width.
+    st.subheader("Runs so far")
+    head = ["Run", r"$R^{+}$ (MW)", "Battery (MW)"]
+    for m in shown:
+        head += [f"{METHOD_SHORT[m]} $\\lambda$", f"{METHOD_SHORT[m]} $\\pi^{{+}}$",
+                 f"{METHOD_SHORT[m]} cost (\\$/h)"]
+    rows = []
+    for e in trail:
+        row = [str(e["n"]), _sp(e["R"]), _sp(e["batt"])]
+        for m in shown:
+            z = e[m]
+            if z["ok"]:
+                row += [fmt_price(z["lam_rng"], "")[0], fmt_price(z["pi_rng"], "")[0],
+                        _sp(z["cost"])]
+            else:
+                row += ["cannot meet"] * 3
+        rows.append(row)
+    _runs_table(head, rows)
+
+    with st.expander("Unit data", expanded=False):
+        head = ["Unit", r"$c_k$ (\$/MWh)", r"$\underline{P}_k$ (MW)", r"$\bar{P}_k$ (MW)",
+                r"$RR_k$ (MW)", r"$c^{+}_k$ (\$/MW/h)"]
+        urows = [[_unit_label(u), _n(u["c"]), _n(u["Pmin"]), _n(u["Pmax"]), _n(u["RR"]),
+                  _n(u["cp"])] for u in units]
+        st.markdown(_pipe_table(head, urows))
+        st.markdown(f"Demand $D$ = {_sp(D)} MW. One five-minute interval, copper plate.")
+
+    with st.expander("The LP and its multipliers", expanded=False):
         obj = r"\min \sum_{k} ( c_k P_k + c^{+}_k r^{+}_k )"
         st.latex(obj + (r" + c^{+}_B r^{+}_B" if batt > 0 else ""))
         st.latex(r"\sum_{k} P_k = D \quad [\lambda]")
@@ -1236,112 +1527,43 @@ def _raise_page() -> None:
                     r"above its minimum, $\min(RR_k, \bar{P}_k - \underline{P}_k)$, then "
                     "dispatches energy with that capacity held back.")
 
-    co = _coopt(preset, R, batt)
-    if co is None:
-        ed.note(f"**No feasible dispatch.** The requirement of {_sp(R)} MW cannot be met.")
-        return
-    ef = _ef(preset, R, batt)
-    rf = _rf(preset, R, batt)
-    ef_ok = ef["res"] is not None and ef["res"]["feasible"]
-    rf_ok = rf["res"] is not None and rf["res"]["feasible"]
-    ef_msg = (f"**Energy first cannot meet the requirement.** Energy first cannot find {_sp(R)} MW "
-              f"of raise in the headroom left after the energy market (only {_sp(ef['headroom'])} "
-              "MW is left).")
-    rf_msg = ("**Reserve first cannot meet the requirement.** With the reserve held back, "
-              "energy cannot meet demand.")
+    with st.expander("Who holds reserve and why", expanded=False):
+        v = verdicts(preset, co, batt, unique(co["pi_range"]))
+        st.plotly_chart(_full_cost_bars([(a, b, c, d, e) for a, b, c, d, e in v],
+                                        co["pi_range"]), width="stretch")
+        st.caption("The cheapest offer is not always the cheapest reserve: a full cost "
+                   "includes the energy margin the unit gives up.")
 
-    # A. Prices.
-    st.subheader("Prices")
-    if method == "coopt":
-        lam_rng, pi_rng = co["lam_range"], co["pi_range"]
-        lam_label = r"Energy price $\lambda$ (\$/MWh)"
-        pi_label = r"Reserve price $\pi^{+}$ (\$/MW/h)"
-        lam_set = lam_setter(preset, co, batt)
-        pi_set = pi_setter(preset, co, batt)
-        lam_set = f"The energy price is {lam_set}." if lam_set else None
-        pi_set = f"The reserve price is {pi_set}." if pi_set else None
-    else:
-        lam_label = r"Energy step price $\lambda$ (\$/MWh)"
-        pi_label = r"Reserve step price $\pi^{+}$ (\$/MW/h)"
-        lam_set = pi_set = None
-        if method == "ef":
-            lam_rng = ef["lam_range"]
-            pi_rng = ef["res"]["pi_range"] if ef_ok else None
-        else:
-            lam_rng = rf["lam_range"] if rf_ok else None
-            pi_rng = rf["pi_range"] if rf["pi_range"] is not None else None
-    left, right = st.columns(2)
-    with left:
-        if lam_rng is None:
-            st.markdown("No energy step price: that step has no feasible result.")
-        else:
-            _show_price(lam_label, lam_rng, BEYOND_LAM, lam_set)
-    with right:
-        if method == "ef" and not ef_ok:
-            ed.note(ef_msg)
-        elif method == "rf" and not rf_ok:
-            ed.note(rf_msg)
-        else:
-            _show_price(pi_label, pi_rng, _beyond_pi(R), pi_set)
-    if method != "coopt":
-        st.caption("Each step is priced on its own, so neither price includes the cost of "
-                   "the other product.")
-
-    # B. One capacity, two products.
-    sel = {"coopt": co, "ef": ef["res"] if ef_ok else None, "rf": rf["res"] if rf_ok else None}[method]
-    if sel is not None:
-        st.plotly_chart(_capacity_bars(preset, sel["P"], sel["r"], sel["rB"], batt), width="stretch")
-
-    # C. Who holds reserve and why.
-    if method == "coopt":
-        with st.expander("Who holds reserve and why", expanded=False):
-            v = verdicts(preset, co, batt, unique(co["pi_range"]))
-            st.plotly_chart(_full_cost_bars([(a, b, c, d, e) for a, b, c, d, e in v],
-                                            co["pi_range"]), width="stretch")
-            st.caption("The cheapest offer is not always the cheapest reserve: a full cost "
-                       "includes the energy margin the unit gives up.")
-    else:
-        st.caption("Who holds reserve and why is shown for the co-optimised method.")
-
-    # D. The reserve supply curve.
-    st.subheader("The reserve supply curve")
-    steps = _steps(preset, batt)
-    pl, ph = co["pi_range"]
-    ll, lh = co["lam_range"]
-    pi_text = f"R<sup>+</sup> = {_sp(R)} MW: {PI}<sup>+</sup> {fmt_price(co['pi_range'], '')[0]}"
-    lam_text = f"R<sup>+</sup> = {_sp(R)} MW: {LAMBDA} {fmt_price(co['lam_range'], '')[0]}"
-    st.plotly_chart(_supply_curve(preset, batt, R, steps, pl, ll, pi_text, lam_text), width="stretch")
-    st.caption("The reserve supply curve is not the offer stack: a unit's full cost of reserve "
-               "includes the energy margin it gives up, so the cheapest offer is not always the "
-               "cheapest reserve.")
-
-    # E. Three clearing methods.
-    st.subheader("Three clearing methods")
-    results = {
-        "coopt": dict(feasible=True, cost=co["cost"], lam_range=co["lam_range"],
-                      pi_range=co["pi_range"]),
-        "ef": (dict(feasible=True, cost=ef["res"]["cost"], lam_range=ef["lam_range"],
-                    pi_range=ef["res"]["pi_range"]) if ef_ok else None),
-        "rf": (dict(feasible=True, cost=rf["res"]["cost"], lam_range=rf["lam_range"],
-                    pi_range=rf["pi_range"]) if rf_ok else None),
-    }
-    st.plotly_chart(_method_bars(results, method, R, batt), width="stretch")
-    if not ef_ok:
-        st.markdown(ef_msg)
-    if not rf_ok:
-        st.markdown(rf_msg)
-    st.caption("Each sequential market sees only one product at a time, so it can only cost "
-               "the same or more.")
-
-    # F. Settlement.
-    if method == "coopt":
-        st.subheader("Settlement")
+    with st.expander("Settlement (co-optimised)", expanded=False):
         if not (unique(co["pi_range"]) and unique(co["lam_range"])):
             st.markdown("At exactly this requirement the prices are not unique, so the "
                         "settlement depends on which side of the breakpoint the market clears. "
                         + nonunique_sentence())
         else:
             _settlement_panel(preset, co, R, batt)
+
+
+def _method_table(results: dict, shown: list) -> None:
+    """One row per ticked method: prices, total cost, and the excess over co-optimised."""
+    head = ["Method", r"λ (\$/MWh)", r"π⁺ (\$/MW/h)", r"Total cost (\$/h)",
+            r"Per five-minute interval (\$)", r"More than co-optimised (\$/h)"]
+    base = results["coopt"]["cost"]
+    rows, ranges = [], []
+    for m in shown:
+        z = results[m]
+        if not z["ok"]:
+            rows.append([METHOD_SHORT[m]] + ["cannot meet the requirement"] * 3 + ["none", "none"])
+            continue
+        ranges += [z["lam_rng"], z["pi_rng"]]
+        extra = "0" if m == "coopt" else _sp(z["cost"] - base)
+        rows.append([METHOD_SHORT[m], fmt_price(z["lam_rng"], "")[0],
+                     fmt_price(z["pi_rng"], "")[0], _sp(z["cost"]), _sp(z["cost"] / 12), extra])
+    st.markdown(_pipe_table(head, rows))
+    if any(r is not None and r[0] is not None and r[1] is not None and not unique(r)
+           for r in ranges):
+        st.markdown(nonunique_sentence())
+    st.caption("For the sequential methods, λ is the energy step price and π⁺ the reserve step "
+               "price: each step is priced on its own.")
 
 
 def _settlement_panel(preset, co, R, batt) -> None:
@@ -1367,46 +1589,77 @@ def _settlement_panel(preset, co, R, batt) -> None:
 
 def _trap_page() -> None:
     ss = st.session_state
-    st.radio("Unit", list(TRAP_PRESETS), horizontal=True,
-             format_func=lambda k: TRAP_PRESETS[k]["label"],
-             **_kept("fc_trap_unit", "forum", options=list(TRAP_PRESETS), then=_reset_trap))
-    preset = ss["fc_trap_unit"]
-    spec = TRAP_PRESETS[preset]
-    services = spec["services"]
-    st.radio("Service", list(services), horizontal=True,
-             **_kept("fc_service", "Fast raise", options=list(services)))
-    service = ss["fc_service"]
-    lo, hi = int(spec["P_range"][0]), int(spec["P_range"][1])
-    P = int(st.slider(r"Energy target $P_k$ (MW)", lo, hi, step=5,
-                      **_kept("fc_P", int(spec["P_default"]), lo, hi)))
-    left, right = st.columns(2)
-    a_raise = int(services["Regulation raise"][4])
-    g_raise = int(left.slider(r"Regulation raise enabled $g^{+}_k$ (MW)", 0, a_raise, step=5,
-                              **_kept("fc_g_raise", 0, 0, a_raise)))
-    g_lower = 0
-    if "Regulation lower" in services:
-        a_lower = int(services["Regulation lower"][4])
-        g_lower = int(right.slider(r"Regulation lower enabled $g^{-}_k$ (MW)", 0, a_lower, step=5,
-                                   **_kept("fc_g_lower", 0, 0, a_lower)))
-    if "Regulation" in service:
-        st.caption("Regulation does not reduce its own availability; the sliders only move the "
-                   "contingency rows.")
-    cap_r, cap_l = reg_cap(preset, P, "raise"), reg_cap(preset, P, "lower")
-    gr, gl = min(float(g_raise), cap_r), min(float(g_lower), cap_l)
-    if g_raise > cap_r + EPS:
-        st.markdown(rf"Regulation raise is limited to {_mw(cap_r)} MW by its own trapezium at "
-                    rf"this energy target, so {_mw(gr)} MW is used.")
-    if g_lower > cap_l + EPS:
-        st.markdown(rf"Regulation lower is limited to {_mw(cap_l)} MW by its own trapezium at "
-                    rf"this energy target, so {_mw(gl)} MW is used.")
+    left, right = st.columns([1, 2.4], gap="large")
+    with left:
+        st.radio("Unit", list(TRAP_PRESETS), horizontal=False,
+                 format_func=lambda k: TRAP_PRESETS[k]["label"],
+                 **_kept("fc_trap_unit", "forum", options=list(TRAP_PRESETS), then=_reset_trap))
+        preset = ss["fc_trap_unit"]
+        spec = TRAP_PRESETS[preset]
+        services = spec["services"]
+        st.radio("Service", list(services), horizontal=False,
+                 **_kept("fc_service", "Fast raise", options=list(services)))
+        service = ss["fc_service"]
+        lo, hi = int(spec["P_range"][0]), int(spec["P_range"][1])
+        P = int(st.slider(r"Energy target $P_k$ (MW)", lo, hi, step=5,
+                          **_kept("fc_P", int(spec["P_default"]), lo, hi)))
+        a_raise = int(services["Regulation raise"][4])
+        g_raise = int(st.slider(r"Regulation raise enabled $g^{+}_k$ (MW)", 0, a_raise, step=5,
+                                **_kept("fc_g_raise", 0, 0, a_raise)))
+        g_lower = 0
+        if "Regulation lower" in services:
+            a_lower = int(services["Regulation lower"][4])
+            g_lower = int(st.slider(r"Regulation lower enabled $g^{-}_k$ (MW)", 0, a_lower, step=5,
+                                    **_kept("fc_g_lower", 0, 0, a_lower)))
+        if "Regulation" in service:
+            st.caption("Regulation does not reduce its own availability; the sliders only move "
+                       "the contingency rows.")
+        cap_r, cap_l = reg_cap(preset, P, "raise"), reg_cap(preset, P, "lower")
+        gr, gl = min(float(g_raise), cap_r), min(float(g_lower), cap_l)
+        if g_raise > cap_r + EPS:
+            st.markdown(rf"Regulation raise is limited to {_mw(cap_r)} MW by its own trapezium "
+                        rf"at this energy target, so {_mw(gr)} MW is used.")
+        if g_lower > cap_l + EPS:
+            st.markdown(rf"Regulation lower is limited to {_mw(cap_l)} MW by its own trapezium "
+                        rf"at this energy target, so {_mw(gl)} MW is used.")
 
-    t = services[service]
-    Emin, Blo, Bhi, Emax, A = t
-    US, LS = slopes(t)
-    avail, side = availability(t, P, gr, gl, service)
-    inside = Emin - 1e-9 <= P <= Emax + 1e-9
+        t = services[service]
+        Emin, Blo, Bhi, Emax, A = t
+        US, LS = slopes(t)
+        avail, side = availability(t, P, gr, gl, service)
+        inside = Emin - 1e-9 <= P <= Emax + 1e-9
+        trail = _trail("trap", preset, dict(knobs=(service, P, g_raise, g_lower), service=service,
+                                            P=P, gr=gr, gl=gl, avail=avail, side=side))
+        if inside:
+            ed.headline(f"Available for {service}", f"{_mw(avail)} MW")
+            st.markdown(f"**Available: {_mw(avail)} MW** (the {side} binds)")
+        else:
+            ed.headline(f"Available for {service}", "0 MW")
+            st.markdown(r"The energy target is outside $E^{min}_k$ to $E^{max}_k$, so the unit "
+                        "cannot be enabled for this service: 0 MW.")
+        _clear_button("trap", trail)
 
-    with st.expander("The rows", expanded=True):
+    with right:
+        pts = [(e["n"], e["P"], e["avail"],
+                f"run {e['n']}: P {_mw(e['P'])} MW, available {_mw(e['avail'])} MW ({e['side']})",
+                effective_g(service, e["gr"], e["gl"]) != effective_g(service, gr, gl))
+               for e in trail[:-1] if e["service"] == service]
+        st.plotly_chart(_trapezium(t, P, gr, gl, service, avail, side if inside else "",
+                                   spec["P_range"], trail=trail_marks(pts)), width="stretch")
+        st.subheader("Runs so far")
+        head = ["Run", "Service", r"$P_k$ (MW)", r"$g^{+}_k$ (MW)"]
+        if "Regulation lower" in services:
+            head.append(r"$g^{-}_k$ (MW)")
+        head += ["Available (MW)", "Row that binds"]
+        rows = []
+        for e in trail:
+            row = [str(e["n"]), e["service"], _mw(e["P"]), _mw(e["gr"])]
+            if "Regulation lower" in services:
+                row.append(_mw(e["gl"]))
+            rows.append(row + [_mw(e["avail"]), e["side"]])
+        _runs_table(head, rows)
+
+    with st.expander("The rows", expanded=False):
         st.latex(r"US_k = \frac{E^{max}_k - B^{hi}_k}{A_k}, \qquad "
                  r"LS_k = \frac{B^{lo}_k - E^{min}_k}{A_k}")
         st.latex(r"0 \le r_k \le A_k")
@@ -1420,26 +1673,18 @@ def _trap_page() -> None:
                     rf"$B^{{hi}}_k$ = {_mw(Bhi)}, $E^{{max}}_k$ = {_mw(Emax)}, $A_k$ = {_mw(A)} MW, "
                     rf"so $US_k$ = {_n(US)} and $LS_k$ = {_n(LS)}.")
 
-    # A. The trapezium.
-    st.subheader("The trapezium")
-    st.plotly_chart(_trapezium(t, P, gr, gl, service, avail, side if inside else "", spec["P_range"]),
-                    width="stretch")
+    with st.expander("Step by step", expanded=False):
+        if not inside:
+            st.markdown(r"The energy target is outside $E^{min}_k$ to $E^{max}_k$, so the unit "
+                        "cannot be enabled for this service: 0 MW.")
+        else:
+            for step in trap_steps(t, P, gr, gl, service):
+                if step["value"] is None:
+                    st.markdown(f"- {step['label']}: vertical side: no limit from this row")
+                else:
+                    mark = " **(smallest)**" if step["row"] == side else ""
+                    st.markdown(f"- {step['label']}: ${step['tex']}$ MW{mark}")
 
-    # B. Step by step.
-    st.subheader("Step by step")
-    if not inside:
-        st.markdown(r"The energy target is outside $E^{min}_k$ to $E^{max}_k$, so the unit cannot "
-                    "be enabled for this service: 0 MW.")
-    else:
-        for step in trap_steps(t, P, gr, gl, service):
-            if step["value"] is None:
-                st.markdown(f"- {step['label']}: vertical side: no limit from this row")
-            else:
-                mark = " **(smallest)**" if step["row"] == side else ""
-                st.markdown(f"- {step['label']}: ${step['tex']}$ MW{mark}")
-        st.markdown(f"**Available: {_mw(avail)} MW** (the {side} binds)")
-
-    # C. All services.
     with st.expander("All services at this energy target", expanded=False):
         st.plotly_chart(_trap_multiples(preset, P, gr, gl), width="stretch")
         table = []
@@ -1460,94 +1705,135 @@ def _trap_page() -> None:
 
 def _lower_page() -> None:
     ss = st.session_state
-    st.radio("Preset", list(LOWER_PRESETS), horizontal=True,
-             format_func=lambda k: LOWER_PRESETS[k]["label"],
-             **_kept("fc_lower_preset", "forum_midday", options=list(LOWER_PRESETS),
-                     then=_reset_lower))
-    preset = ss["fc_lower_preset"]
-    p = LOWER_PRESETS[preset]
-    units = p["units"]
-    head = ["Unit", r"$c_k$ (\$/MWh)", r"$\underline{P}_k$ (MW)", r"$\bar{P}_k$ (MW)",
-            r"Lower offered (MW)", r"$c^{-}_k$ (\$/MW/h)"]
-    rows = [[u["name"], _n(u["c"]), _n(u["Pmin"]), _n(u["Pmax"]),
-             _n(u["RRlow"]) if u["RRlow"] > 0 else "none", _n(u["cm"]) if u["RRlow"] > 0 else "none"]
-            for u in units]
-    st.markdown(_pipe_table(head, rows))
-    st.markdown(f"Demand $D$ = {_sp(p['D'])} MW. One five-minute interval, copper plate.")
-    step = 5 if preset == "forum_midday" else 10
-    Rm = int(st.slider(r"Contingency lower requirement $R^{-}$ (MW)", 0, int(p["R_max"]), step=step,
-                       **_kept("fc_Rm", int(p["R_default"]), 0, int(p["R_max"]))))
+    left, right = st.columns([1, 2.4], gap="large")
+    with left:
+        st.radio("Preset", list(LOWER_PRESETS), horizontal=False,
+                 format_func=lambda k: LOWER_PRESETS[k]["label"],
+                 **_kept("fc_lower_preset", "forum_midday", options=list(LOWER_PRESETS),
+                         then=_reset_lower))
+        preset = ss["fc_lower_preset"]
+        p = LOWER_PRESETS[preset]
+        units = p["units"]
+        step = 5 if preset == "forum_midday" else 10
+        Rm = int(st.slider(r"Contingency lower requirement $R^{-}$ (MW)", 0, int(p["R_max"]),
+                           step=step, **_kept("fc_Rm", int(p["R_default"]), 0, int(p["R_max"]))))
+    s = _lower(preset, Rm)
+    if s is None:
+        with right:
+            ed.note(f"**No feasible dispatch.** The requirement of {_sp(Rm)} MW cannot be met.")
+        return
+    trail = _trail("lower", preset, dict(knobs=(Rm,), Rm=Rm, lam_rng=s["lam_range"],
+                                         pi_rng=s["pi_range"], P=list(s["P"]), r=list(s["r"])))
+    beyond = (f"There is no feasible dispatch above {_sp(Rm)} MW, so the price has no "
+              "right-hand value.")
+    with left:
+        _show_price(r"Energy price $\lambda$ (\$/MWh)", s["lam_range"], BEYOND_LAM, None)
+        _show_price(r"Lower price $\pi^{-}$ (\$/MW/h)", s["pi_range"], beyond, None)
+        _clear_button("lower", trail)
+
+    with right:
+        pts = [(e["n"], e["Rm"], range_low(e["pi_rng"]),
+                f"run {e['n']}: R⁻ {_sp(e['Rm'])} MW, π⁻ {fmt_price(e['pi_rng'], '')[0]}", False)
+               for e in trail[:-1]]
+        pl = s["pi_range"][0]
+        text = f"R<sup>\u2212</sup> = {_sp(Rm)} MW: {PI}<sup>\u2212</sup> {fmt_price(s['pi_range'], '')[0]}"
+        st.plotly_chart(_lower_steps(_lsteps(preset), Rm, pl, text, trail=trail_marks(pts)),
+                        width="stretch")
+        st.plotly_chart(_lower_bars(preset, s), width="stretch")
+        ls = lower_setter(preset, s)
+        if ls is not None and unique(s["pi_range"]) and unique(s["lam_range"]):
+            st.latex(rf"\pi^{{-}} = c^{{-}}_k + ( c_k - \lambda ) = {_m(ls['cm'])} + "
+                     rf"({_m(ls['c'])} - {_m(ls['lam'])}) = {_m(ls['pi'])}")
+            who = "The gas unit" if ls["name"] == "Gas" else ls["name"]
+            st.markdown(f"{who} must run above the level it would choose at $\\lambda$ = "
+                        f"{_n(ls['lam'])} \\$/MWh, and loses {_n(ls['c'])} − {_n(ls['lam'])} = "
+                        f"{_n(ls['c'] - ls['lam'])} on each extra MWh. Lower FCAS is expensive "
+                        "exactly when energy is cheap.")
+
+    st.subheader("Runs so far")
+    lower_units = [(k, u) for k, u in enumerate(units) if u["RRlow"] > 0]
+    head = ["Run", r"$R^{-}$ (MW)", r"$\lambda$ (\$/MWh)", r"$\pi^{-}$ (\$/MW/h)"]
+    head += [f"{u['name']} $P_k$ (MW)" for u in units]
+    head += [f"{u['name']} $r^{{-}}_k$ (MW)" for _, u in lower_units]
+    rows = []
+    for e in trail:
+        row = [str(e["n"]), _sp(e["Rm"]), fmt_price(e["lam_rng"], "")[0],
+               fmt_price(e["pi_rng"], "")[0]]
+        row += [_mw(v) for v in e["P"]]
+        row += [_mw(e["r"][k]) for k, _ in lower_units]
+        rows.append(row)
+    _runs_table(head, rows)
+
+    with st.expander("Unit data", expanded=False):
+        head = ["Unit", r"$c_k$ (\$/MWh)", r"$\underline{P}_k$ (MW)", r"$\bar{P}_k$ (MW)",
+                r"Lower offered (MW)", r"$c^{-}_k$ (\$/MW/h)"]
+        urows = [[u["name"], _n(u["c"]), _n(u["Pmin"]), _n(u["Pmax"]),
+                  _n(u["RRlow"]) if u["RRlow"] > 0 else "none",
+                  _n(u["cm"]) if u["RRlow"] > 0 else "none"] for u in units]
+        st.markdown(_pipe_table(head, urows))
+        st.markdown(f"Demand $D$ = {_sp(p['D'])} MW. One five-minute interval, copper plate.")
     with st.expander("The LP and its multipliers", expanded=False):
         st.latex(r"\min \sum_{k} ( c_k P_k + c^{-}_k r^{-}_k )")
         st.latex(r"\sum_{k} P_k = D \quad [\lambda]")
         st.latex(r"P_k - r^{-}_k \ge \underline{P}_k \quad [\underline{\mu}_k]")
         st.latex(r"0 \le r^{-}_k \le RR^{-}_k, \qquad \sum_{k} r^{-}_k \ge R^{-} \quad [\pi^{-}]")
-    s = _lower(preset, Rm)
-    if s is None:
-        ed.note(f"**No feasible dispatch.** The requirement of {_sp(Rm)} MW cannot be met.")
-        return
-
-    st.subheader("Prices")
-    beyond = (f"There is no feasible dispatch above {_sp(Rm)} MW, so the price has no "
-              "right-hand value.")
-    left, right = st.columns(2)
-    with left:
-        _show_price(r"Energy price $\lambda$ (\$/MWh)", s["lam_range"], BEYOND_LAM, None)
-    with right:
-        _show_price(r"Lower price $\pi^{-}$ (\$/MW/h)", s["pi_range"], beyond, None)
-    st.plotly_chart(_lower_bars(preset, s), width="stretch")
-
-    ls = lower_setter(preset, s)
-    if ls is not None and unique(s["pi_range"]) and unique(s["lam_range"]):
-        st.latex(rf"\pi^{{-}} = c^{{-}}_k + ( c_k - \lambda ) = {_m(ls['cm'])} + "
-                 rf"({_m(ls['c'])} - {_m(ls['lam'])}) = {_m(ls['pi'])}")
-        who = "The gas unit" if ls["name"] == "Gas" else ls["name"]
-        st.markdown(f"{who} must run above the level it would choose at $\\lambda$ = "
-                    f"{_n(ls['lam'])} \\$/MWh, and loses {_n(ls['c'])} − {_n(ls['lam'])} = "
-                    f"{_n(ls['c'] - ls['lam'])} on each extra MWh. Lower FCAS is expensive "
-                    "exactly when energy is cheap.")
-    st.subheader(r"The lower price against the requirement")
-    pl = s["pi_range"][0]
-    text = f"R<sup>\u2212</sup> = {_sp(Rm)} MW: {PI}<sup>\u2212</sup> {fmt_price(s['pi_range'], '')[0]}"
-    st.plotly_chart(_lower_steps(_lsteps(preset), Rm, pl, text), width="stretch")
 
 
 # --- Mode 4 -----------------------------------------------------------------
 
 def _gl_page() -> None:
-    st.markdown(r"Mainland providers offer 500 MW at 3 \$/MW/h. South Australian providers offer "
-                r"40 MW at 10 and 60 MW at 50 \$/MW/h. The global requirement is fixed at "
-                r"$R^{G}$ = 400 MW.")
-    R_SA = int(st.slider(r"South Australian local requirement $R^{SA}$ (MW)", 0, 100, step=10,
-                         **_kept("fc_RSA", 80, 0, 100)))
-    st.latex(r"\sum_{k \in NEM} r_k \ge R^{G} \quad [\pi^{G}], \qquad "
-             r"\sum_{k \in SA} r_k \ge R^{SA} \quad [\pi^{SA}]")
+    left, right = st.columns([1, 2.4], gap="large")
+    with left:
+        st.markdown(r"Mainland providers offer 500 MW at 3 \$/MW/h. South Australian providers "
+                    r"offer 40 MW at 10 and 60 MW at 50 \$/MW/h. The global requirement is fixed "
+                    r"at $R^{G}$ = 400 MW.")
+        R_SA = int(st.slider(r"South Australian local requirement $R^{SA}$ (MW)", 0, 100, step=10,
+                             **_kept("fc_RSA", 80, 0, 100)))
     s = _gl(R_SA)
     if s is None:
-        ed.note("**No feasible dispatch.**")
+        with right:
+            ed.note("**No feasible dispatch.**")
         return
-    rows = [[q["name"], q["region"] if q["region"] == "SA" else "NEM", _n(q["mw"]), _n(q["price"]),
-             _n(x)] for q, x in zip(LOCAL["providers"], s["x"])]
-    st.markdown(_pipe_table(["Provider", "Region", "Offered (MW)", r"Offer (\$/MW/h)",
-                             "Enabled (MW)"], rows))
+    trail = _trail("gl", "gl", dict(knobs=(R_SA,), R_SA=R_SA, piG_rng=s["piG_range"],
+                                    piSA_rng=s["piSA_range"], sa_rng=s["sa_range"],
+                                    y=sa_stack_price(R_SA)))
     beyond = (f"There is no feasible dispatch above {_sp(R_SA)} MW of local requirement, so the "
               "price has no right-hand value.")
-    c1, c2 = st.columns(2)
-    with c1:
+    with left:
         _show_price(r"Global price $\pi^{G}$ (\$/MW/h)", s["piG_range"], beyond, None)
-    with c2:
-        _show_price(r"South Australian row price $\pi^{SA}$ (\$/MW/h)", s["piSA_range"], beyond, None)
-    sa_head, sa_sentence = fmt_price(s["sa_range"], beyond)
-    pg_head = fmt_price(s["piG_range"], beyond)[0]
-    if unique(s["sa_range"]) and unique(s["piG_range"]):
-        st.markdown(rf"Regional prices: mainland $\pi^{{G}}$ = **{pg_head}** \$/MW/h; South Australia "
-                    rf"$\pi^{{G}} + \pi^{{SA}}$ = {_n(s['piG'])} + {_n(s['piSA'])} = **{sa_head}** "
-                    r"\$/MW/h.")
-    else:
-        st.markdown(rf"Regional prices: mainland $\pi^{{G}}$ = **{pg_head}** \$/MW/h; South "
-                    rf"Australia $\pi^{{G}} + \pi^{{SA}}$ is **{sa_head}** \$/MW/h.")
-    st.plotly_chart(_sa_curve(R_SA, s["piG"], ""), width="stretch")
+        _show_price(r"South Australian row price $\pi^{SA}$ (\$/MW/h)", s["piSA_range"], beyond,
+                    None)
+        sa_head, _ = fmt_price(s["sa_range"], beyond)
+        pg_head = fmt_price(s["piG_range"], beyond)[0]
+        if unique(s["sa_range"]) and unique(s["piG_range"]):
+            st.markdown(rf"Regional prices: mainland $\pi^{{G}}$ = **{pg_head}** \$/MW/h; South "
+                        rf"Australia $\pi^{{G}} + \pi^{{SA}}$ = {_n(s['piG'])} + {_n(s['piSA'])} = "
+                        rf"**{sa_head}** \$/MW/h.")
+        else:
+            st.markdown(rf"Regional prices: mainland $\pi^{{G}}$ = **{pg_head}** \$/MW/h; South "
+                        rf"Australia $\pi^{{G}} + \pi^{{SA}}$ is **{sa_head}** \$/MW/h.")
+        _clear_button("gl", trail)
+
+    with right:
+        pts = [(e["n"], e["R_SA"], e["y"],
+                f"run {e['n']}: R<sup>SA</sup> {_mw(e['R_SA'])} MW, South Australian price "
+                f"{fmt_price(e['sa_rng'], '')[0]}", False) for e in trail[:-1]]
+        st.plotly_chart(_sa_curve(R_SA, s["piG"], "", trail=trail_marks(pts)), width="stretch")
+        rows = [[q["name"], q["region"] if q["region"] == "SA" else "NEM", _n(q["mw"]),
+                 _n(q["price"]), _n(x)] for q, x in zip(LOCAL["providers"], s["x"])]
+        st.markdown(_pipe_table(["Provider", "Region", "Offered (MW)", r"Offer (\$/MW/h)",
+                                 "Enabled (MW)"], rows))
+
+    st.subheader("Runs so far")
+    head = ["Run", r"$R^{SA}$ (MW)", r"$\pi^{G}$ (\$/MW/h)", r"$\pi^{SA}$ (\$/MW/h)",
+            r"South Australian price $\pi^{G} + \pi^{SA}$ (\$/MW/h)"]
+    rows = [[str(e["n"]), _mw(e["R_SA"]), fmt_price(e["piG_rng"], "")[0],
+             fmt_price(e["piSA_rng"], "")[0], fmt_price(e["sa_rng"], "")[0]] for e in trail]
+    _runs_table(head, rows)
     ed.note("In January and February 2020 South Australia was separated from the NEM for about "
             "18 days. Its FCAS had to come from inside the region, so the local rows bound, and "
             "South Australian fast raise reached the 14 700 $/MW/h market price cap for 365 "
             "minutes.")
+    with st.expander("The rows and their multipliers", expanded=False):
+        st.latex(r"\sum_{k \in NEM} r_k \ge R^{G} \quad [\pi^{G}], \qquad "
+                 r"\sum_{k \in SA} r_k \ge R^{SA} \quad [\pi^{SA}]")
